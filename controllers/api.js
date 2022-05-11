@@ -141,16 +141,23 @@ const postLimiter = rateLimit({
 
 router.post('/create', postLimiter, async function (req, res) {
   logger.log('/create', [req.id]);
+
+  if (!req.body.userid)
+  {
+      return errorBadArguments(res);
+  }
+
   // Valid if the partnerid isn't there or is a string (same with accounttype)
   if (! (
         (!req.body.partnerid || (typeof req.body.partnerid === 'string' || req.body.partnerid instanceof String))
         && (!req.body.accounttype || (typeof req.body.accounttype === 'string' || req.body.accounttype instanceof String))
+        && (!req.body.userid || (typeof req.body.userid === 'string' || req.body.userid instanceof String))
       ) ) return errorBadArguments(res);
-  
+
   if (config.sunset) return errorSunset(res);
 
   let u = new User(redis, bitcoinclient, lightning);
-  await u.create();
+  await u.create(req.body.userid);
   await u.saveMetadata({ partnerid: req.body.partnerid, accounttype: req.body.accounttype, created_at: new Date().toISOString() });
   res.send({ login: u.getLogin(), password: u.getPassword() });
 });

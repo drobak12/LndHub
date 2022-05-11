@@ -55,7 +55,7 @@ const decodeOutput = function (tx, network) {
 };
 
 class TxDecoder {
-  constructor(rawTx, network = bitcoin.networks.bitcoin) {
+  constructor(rawTx, network) {
     this.tx = bitcoin.Transaction.fromHex(rawTx);
     this.format = decodeFormat(this.tx);
     this.inputs = decodeInput(this.tx);
@@ -74,6 +74,6 @@ class TxDecoder {
   }
 }
 
-module.exports.decodeRawHex = (rawTx, network = bitcoin.networks.bitcoin) => {
+module.exports.decodeRawHex = (rawTx, network ) => {
   return new TxDecoder(rawTx, network).decode();
 };

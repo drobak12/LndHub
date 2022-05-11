@@ -1,4 +1,9 @@
+const bitcoin = require('bitcoinjs-lib')
 let config = {
+  network: bitcoin.networks.regtest,
+  //balance_expire_seconds: 1800,
+  balance_expire_seconds: 1,
+
   enableUpdateDescribeGraph: false,
   postRateLimit: 100,
   rateLimit: 200,

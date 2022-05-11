@@ -45,8 +45,8 @@ export class User {
 
   async loadByAuthorization(authorization) {
     if (!authorization) return false;
-    let access_token = authorization.replace('Bearer ', '');
-    let userid = await this._redis.get('userid_for_' + access_token);
+    //let access_token = authorization.replace('Bearer ', '');
+    let userid = authorization; //await this._redis.get('userid_for_' + access_token);
 
     if (userid) {
       this._userid = userid;
@@ -67,15 +67,15 @@ export class User {
     return false;
   }
 
-  async create() {
+  async create(userid) {
     let buffer = crypto.randomBytes(10);
     let login = buffer.toString('hex');
 
     buffer = crypto.randomBytes(10);
     let password = buffer.toString('hex');
 
-    buffer = crypto.randomBytes(24);
-    let userid = buffer.toString('hex');
+    //buffer = crypto.randomBytes(24);
+    //let userid = buffer.toString('hex');
     this._login = login;
     this._password = password;
     this._userid = userid;
@@ -144,9 +144,9 @@ export class User {
    * @returns {Promise<number>} Balance available to spend
    */
   async getBalance() {
-    let balance = (await this._redis.get('balance_for_' + this._userid)) * 1;
+    let balance =  (await this._redis.get('balance_for_' + this._userid)) * 1;
     if (!balance) {
-      balance = await this.getCalculatedBalance();
+      let balance = await this.getCalculatedBalance();
       await this.saveBalance(balance);
     }
     return balance;
@@ -195,9 +195,12 @@ export class User {
    * @returns {Promise<void>}
    */
   async saveBalance(balance) {
-    const key = 'balance_for_' + this._userid;
-    await this._redis.set(key, balance);
-    await this._redis.expire(key, 1800);
+    if (config.balance_expire_seconds>0)
+    {
+      const key = 'balance_for_' + this._userid;
+      await this._redis.set(key, balance);
+      await this._redis.expire(key, config.balance_expire_seconds);
+    }
   }
 
   async clearBalanceCache() {
@@ -342,6 +345,7 @@ export class User {
     txs = txs.result;
     let result = [];
     for (let tx of txs) {
+      console.log('tx address: ' + tx.address + ' redis address: ' + addr);
       if (tx.confirmations >= 3 && tx.address === addr && tx.category === 'receive') {
         tx.type = 'bitcoind_tx';
         result.push(tx);
@@ -448,7 +452,7 @@ export class User {
         transactions
           .filter((tx) => tx.label !== 'external' && !tx.label.includes('openchannel'))
           .map((tx) => {
-            const decodedTx = decodeRawHex(tx.raw_tx_hex);
+            const decodedTx = decodeRawHex(tx.raw_tx_hex, config.network);
             decodedTx.outputs.forEach((vout) =>
               outTxns.push({
                 // mark all as received, since external is filtered out
