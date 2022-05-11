@@ -146,7 +146,7 @@ export class User {
   async getBalance() {
     let balance =  (await this._redis.get('balance_for_' + this._userid)) * 1;
     if (!balance) {
-      let balance = await this.getCalculatedBalance();
+      balance = await this.getCalculatedBalance();
       await this.saveBalance(balance);
     }
     return balance;
@@ -345,7 +345,6 @@ export class User {
     txs = txs.result;
     let result = [];
     for (let tx of txs) {
-      console.log('tx address: ' + tx.address + ' redis address: ' + addr);
       if (tx.confirmations >= 3 && tx.address === addr && tx.category === 'receive') {
         tx.type = 'bitcoind_tx';
         result.push(tx);
