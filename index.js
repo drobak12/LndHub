@@ -48,7 +48,7 @@ app.use(require('./controllers/api'));
 app.use(require('./controllers/website'));
 
 const bindHost = process.env.HOST || '0.0.0.0';
-const bindPort = process.env.PORT || 3000;
+const bindPort = process.env.PORT || 8989;
 
 let server = app.listen(bindPort, bindHost, function () {
   logger.log('BOOTING UP', 'Listening on ' + bindHost + ':' + bindPort);
