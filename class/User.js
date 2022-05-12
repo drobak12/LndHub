@@ -173,7 +173,10 @@ export class User {
       if (tx.type === 'bitcoind_tx') {
         // topup
         calculatedBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
-      } else {
+      } else if(tx.type === 'user_invoice'){
+        
+      } 
+      else {
         calculatedBalance -= +tx.value;
       }
     }
