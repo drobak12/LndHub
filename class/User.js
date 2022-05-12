@@ -357,12 +357,12 @@ export class User {
     for (let invo of userinvoices) {
       if (invo && invo.ispaid) {        
         result.push({
-          "category": "receive",
-          "confirmations": 0,
-          "amount": invo.amt,
-          "address": null,
-          "time": invo.timestamp,
-          "type": invo.type
+          category: "receive",
+          confirmations: 0,
+          amount: invo.amt,
+          address: null,
+          time: invo.timestamp,
+          type: invo.type
         })
       }
     }
