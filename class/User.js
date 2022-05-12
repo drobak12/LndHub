@@ -351,6 +351,23 @@ export class User {
       }
     }
 
+    // probare esto
+    let userinvoices = await this.getUserInvoices();
+
+    for (let invo of userinvoices) {
+      if (invo && invo.ispaid) {        
+        result.push({
+          "category": "receive",
+          "confirmations": 0,
+          "amount": invo.amt,
+          "address": null,
+          "time": invo.timestamp,
+          "type": invo.type
+        })
+      }
+    }
+    // finaliza prueba
+
     let range = await this._redis.lrange('txs_for_' + this._userid, 0, -1);
     for (let invoice of range) {
       invoice = JSON.parse(invoice);
