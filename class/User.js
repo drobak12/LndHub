@@ -45,12 +45,8 @@ export class User {
 
   async loadByAuthorization(authorization) {
     if (!authorization) return false;
-
     //let access_token = authorization.replace('Bearer ', '');
     let userid = authorization; //await this._redis.get('userid_for_' + access_token);
-    let exists = await this._redis.get('userid_for_' + userid);
-    if (!exists)
-      return false;
 
     if (userid) {
       this._userid = userid;
