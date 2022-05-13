@@ -174,7 +174,7 @@ export class User {
         // topup
         calculatedBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
       } else if(tx.type === 'user_invoice'){
-        
+          
       } 
       else {
         calculatedBalance -= +tx.value;
@@ -365,7 +365,8 @@ export class User {
           amount: invo.amt,
           address: null,
           time: invo.timestamp,
-          type: invo.type
+          type: invo.type,
+          description: invo.description
         })
       }
     }
