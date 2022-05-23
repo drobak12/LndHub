@@ -90,6 +90,12 @@ const subscribeInvoicesCallCallback = async function (response) {
     user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
     await user.clearBalanceCache();
     console.log('payment', LightningInvoiceSettledNotification.hash, 'was paid, posting to GroundControl...');
+    
+
+      //Lightningchat
+      await this._redis.rpush('invoice_paid_for_bot', JSON.stringify({user_id: user._userid, amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat}));    
+      //end lightningchat
+
     const baseURI = process.env.GROUNDCONTROL;
     if (!baseURI) return;
     const _api = new Frisbee({ baseURI: baseURI });
