@@ -132,6 +132,61 @@ export class User {
     });
   }
 
+async sendCoins(requestId, amount, address) {
+
+    // obtaining a lock
+console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
+    let lock = new Lock(this._redis, 'generating_address_' + this.getUserId());
+    if (!(await lock.obtainLock())) {
+      return errorGeneralServerError(res);
+    }
+
+    // Getting balance
+console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
+    let userBalance;
+    try {
+      await this.clearBalanceCache();
+      userBalance = await this.getCalculatedBalance();
+    } catch (Error) {
+      logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
+      lock.releaseLock();
+      return errorTryAgainLater(res);
+    }
+
+    // Check balance
+console.log('Checking balance with transaction amount' + requestId + ' userid: '+ this.getUserId())
+    if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
+      await lock.releaseLock();
+      return errorNotEnougBalance(res);
+    }
+
+console.log('Executing sendcoins... ' + requestId + ' userid: '+ this.getUserId() + ' address: ' + address + ' amount: ' + amount)
+    let user= this;
+    
+    return new Promise(function (resolve, reject) {
+      user._lightning.sendCoins({ addr: address, amount: amount }, async function (err, response) {
+        if (err) {
+console.log('LND failure when trying to send coins:: ' + err)
+lock.releaseLock();
+          return reject('LND failure when trying to send coins::' + err);
+        }
+        
+console.log('response.txid::' + response.txid)
+lock.releaseLock();        
+/*        await user.saveSendCoinsTx({
+          timestamp: parseInt(+new Date() / 1000),
+          type: 'sendcoins',
+          value: +amount + Math.floor(amount * internalFee),
+          fee: Math.floor(amount * internalFee),
+          memo: 'Send coins to ' + address,
+          pay_req: req.body.invoice,
+        });
+*/
+        resolve(response.txid);
+      });
+    });
+  }
+
   async watchAddress(address) {
     if (!address) return;
     if (config.bitcoind) return this._bitcoindrpc.request('importaddress', [address, address, false]);
@@ -212,6 +267,10 @@ export class User {
   }
 
   async savePaidLndInvoice(doc) {
+    return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
+  }
+
+async saveSendCoinsTx(doc) {
     return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
   }
 
