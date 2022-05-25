@@ -93,7 +93,7 @@ const subscribeInvoicesCallCallback = async function (response) {
     
 
       //Lightningchat
-      await this._redis.rpush('invoice_paid_for_bot', JSON.stringify({
+      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
         user_id: user._userid, 
         amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
         time: new Date().getTime() / 1000
