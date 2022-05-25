@@ -132,7 +132,7 @@ export class User {
     });
   }
 
-async sendCoins(requestId, amount, address) {
+  async sendCoins(requestId, amount, address, amountfee) {
 
     // obtaining a lock
     console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
@@ -171,17 +171,17 @@ async sendCoins(requestId, amount, address) {
           return reject('LND failure when trying to send coins::' + err);
         }
         
-          console.log('response.txid::' + response.txid)
-          lock.releaseLock();        
-/*        await user.saveSendCoinsTx({
+        console.log('response.txid::' + response.txid)
+        lock.releaseLock();        
+        await user.saveSendCoinsTx({
           timestamp: parseInt(+new Date() / 1000),
           type: 'sendcoins',
-          value: +amount + Math.floor(amount * internalFee),
-          fee: Math.floor(amount * internalFee),
-          memo: 'Send coins to ' + address,
-          pay_req: req.body.invoice,
+          value: amount + amountfee,
+          fee: amountfee,
+          txid: response.txid,
+          memo: 'Send coins to ' + address
         });
-*/
+
         resolve(response.txid);
       });
     });
@@ -434,37 +434,42 @@ async sendCoins(requestId, amount, address) {
     let range = await this._redis.lrange('txs_for_' + this._userid, 0, -1);
     for (let invoice of range) {
       invoice = JSON.parse(invoice);
-      invoice.type = 'paid_invoice';
+      if(invoice.type === "sendcoins"){
 
-      // for internal invoices it might not have properties `payment_route`  and `decoded`...
-      if (invoice.payment_route) {
-        invoice.fee = +invoice.payment_route.total_fees;
-        invoice.value = +invoice.payment_route.total_fees + +invoice.payment_route.total_amt;
-        if (invoice.payment_route.total_amt_msat && invoice.payment_route.total_amt_msat / 1000 !== +invoice.payment_route.total_amt) {
-          // okay, we have to account for MSAT
-          invoice.value =
-            +invoice.payment_route.total_fees +
-            Math.max(parseInt(invoice.payment_route.total_amt_msat / 1000), +invoice.payment_route.total_amt) +
-            1; // extra sat to cover for msats, as external layer (clients) dont have that resolution
+      }else{
+        invoice.type = 'paid_invoice';
+
+        // for internal invoices it might not have properties `payment_route`  and `decoded`...
+        if (invoice.payment_route) {
+          invoice.fee = +invoice.payment_route.total_fees;
+          invoice.value = +invoice.payment_route.total_fees + +invoice.payment_route.total_amt;
+          if (invoice.payment_route.total_amt_msat && invoice.payment_route.total_amt_msat / 1000 !== +invoice.payment_route.total_amt) {
+            // okay, we have to account for MSAT
+            invoice.value =
+              +invoice.payment_route.total_fees +
+              Math.max(parseInt(invoice.payment_route.total_amt_msat / 1000), +invoice.payment_route.total_amt) +
+              1; // extra sat to cover for msats, as external layer (clients) dont have that resolution
+          }
+        } else {
+          invoice.fee = 0;
         }
-      } else {
-        invoice.fee = 0;
+        if (invoice.decoded) {
+          invoice.timestamp = invoice.decoded.timestamp;
+          invoice.memo = invoice.decoded.description;
+        }
+        if (invoice.payment_preimage) {
+          invoice.payment_preimage = Buffer.from(invoice.payment_preimage, 'hex').toString('hex');
+        }
+        // removing unsued by client fields to reduce size
+        delete invoice.payment_error;
+        delete invoice.payment_route;
+        delete invoice.pay_req;
+        delete invoice.decoded;
+      
       }
-      if (invoice.decoded) {
-        invoice.timestamp = invoice.decoded.timestamp;
-        invoice.memo = invoice.decoded.description;
-      }
-      if (invoice.payment_preimage) {
-        invoice.payment_preimage = Buffer.from(invoice.payment_preimage, 'hex').toString('hex');
-      }
-      // removing unsued by client fields to reduce size
-      delete invoice.payment_error;
-      delete invoice.payment_route;
-      delete invoice.pay_req;
-      delete invoice.decoded;
+
       result.push(invoice);
     }
-
     return result;
   }
 

@@ -159,9 +159,11 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
 
   let amount = req.body.amount;
   let address = req.body.address;
+  let amountfee = Math.floor(amount * internalFee);
 
   try {
-    let txid = await u.sendCoins(req.id, amount, address);
+    let txid = await u.sendCoins(req.id, amount, address, amountfee);
+    logger.log('TX Response::' + txid);
     res.send({txid: txid});
   } catch (Error) {
     logger.log('', [req.id, 'error executing sendcoins:', Error.message]);
