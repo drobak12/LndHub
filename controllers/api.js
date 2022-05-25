@@ -93,7 +93,11 @@ const subscribeInvoicesCallCallback = async function (response) {
     
 
       //Lightningchat
-      await redis.rpush('invoice_paid_for_bot', JSON.stringify({user_id: user._userid, amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat}));    
+      await this._redis.rpush('invoice_paid_for_bot', JSON.stringify({
+        user_id: user._userid, 
+        amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
+        time: new Date().getTime() / 1000
+      })); 
       //end lightningchat
 
     const baseURI = process.env.GROUNDCONTROL;
