@@ -93,7 +93,7 @@ const subscribeInvoicesCallCallback = async function (response) {
     
 
       //Lightningchat
-      await this._redis.rpush('invoice_paid_for_bot', JSON.stringify({user_id: user._userid, amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat}));    
+      await redis.rpush('invoice_paid_for_bot', JSON.stringify({user_id: user._userid, amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat}));    
       //end lightningchat
 
     const baseURI = process.env.GROUNDCONTROL;
@@ -143,6 +143,30 @@ const rateLimit = require('express-rate-limit');
 const postLimiter = rateLimit({
   windowMs: 30 * 60 * 1000,
   max: config.postRateLimit || 100,
+});
+
+router.post('/sendcoins', postLimiter, async function (req, res) {
+  logger.log('/sendcoins', [req.id]);
+
+  let u = new User(redis, bitcoinclient, lightning);
+  if (!(await u.loadByAuthorization(req.headers.authorization))) {
+    return errorBadAuth(res);
+  }
+  logger.log('/sendcoins', [req.id, 'userid: ' + u.getUserId()]);
+
+  if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+  if (!req.body.address) return errorBadArguments(res);
+
+  let amount = req.body.amount;
+  let address = req.body.address;
+
+  try {
+    let txid = await u.sendCoins(req.id, amount, address);
+    res.send({txid: txid});
+  } catch (Error) {
+    logger.log('', [req.id, 'error executing sendcoins:', Error.message]);
+    return errorSendCoins(res, Error);
+  }
 });
 
 router.post('/create', postLimiter, async function (req, res) {
@@ -629,5 +653,13 @@ function errorSunsetAddInvoice(res) {
     error: true,
     code: 11,
     message: 'This LNDHub instance is scheduled to shut down. Withdraw any remaining funds',
+  });
+}
+
+function errorSendCoins(res, message) {
+  return res.send({
+    error: true,
+    code: 1,
+    message: 'Error sending coins:: ' + message,
   });
 }
