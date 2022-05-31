@@ -146,8 +146,8 @@ export class User {
     console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
     let userBalance;
     try {
-      await this.clearBalanceCache();
-      userBalance = await this.getCalculatedBalance();
+      //await this.clearBalanceCache();
+      //userBalance = await this.getCalculatedBalance();
     } catch (Error) {
       logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
       lock.releaseLock();
@@ -155,11 +155,11 @@ export class User {
     }
 
     // Check balance
-    console.log('Checking balance for generating bill' + requestId + ' userid: '+ this.getUserId())
+    /*console.log('Checking balance for generating bill' + requestId + ' userid: '+ this.getUserId())
     if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
-    }
+    }*/
 
     // Generate Bill
     try{
@@ -341,7 +341,6 @@ export class User {
   }
 
   async saveUserInvoice(doc) {
-    lightningPayReq.encode();
     let decoded = lightningPayReq.decode(doc.payment_request);
     let payment_hash;
     for (let tag of decoded.tags) {

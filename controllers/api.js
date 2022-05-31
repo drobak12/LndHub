@@ -180,12 +180,7 @@ router.post('/bill', postLimiter, async function (req, res) {
 router.get('/bill', async function (req, res) {
   logger.log('/bill', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
-  await u.loadByAuthorization(req.headers.authorization);
-
-  if (!u.getUserId()) {
-    return errorBadAuth(res);
-  }
-
+  
   if (!req.query.token) return errorBadArguments(res);
   
   let token = req.query.token;
@@ -207,12 +202,7 @@ router.get('/bill', async function (req, res) {
 router.get('/bill/process', async function (req, res) {
   logger.log('/bill', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
-  await u.loadByAuthorization(req.headers.authorization);
-
-  if (!u.getUserId()) {
-    return errorBadAuth(res);
-  }
-
+  
   if (!req.query.k1) return errorBadArguments(res);
   if (!req.query.pr) return errorBadArguments(res);
   
@@ -220,6 +210,12 @@ router.get('/bill/process', async function (req, res) {
   let paymentRequest = req.query.pr;
   let bill = await u.getBill(token);
   if (!bill) {
+    return errorBadAuth(res);
+  }
+
+  await u.loadByAuthorization(bill.created_by);
+
+  if (!u.getUserId()) {
     return errorBadAuth(res);
   }
   
@@ -362,6 +358,29 @@ router.get('/bill/process', async function (req, res) {
 
   return res.send({status:"OK"});
 });
+
+router.get('/bech32/decode', async function (req, res) {
+  logger.log('/bech32/decode', [req.id]);
+  let u = new User(redis, bitcoinclient, lightning);
+  await u.loadByAuthorization(req.headers.authorization);
+
+  if (!u.getUserId()) {
+    return errorBadAuth(res);
+  }
+
+  if (!req.query.value) return errorBadArguments(res);
+  
+  try {
+    let token = req.query.value;
+    const decode = lnurl.decode(token);
+    
+    res.send({decode: decode });
+  } catch (Error) {
+    logger.log('', [req.id, 'error decoding bill bech32:', Error.message]);
+    return errorSendCoins(res, Error);
+  }
+});
+
 
 router.post('/sendcoins', postLimiter, async function (req, res) {
   logger.log('/sendcoins', [req.id]);
