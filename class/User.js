@@ -341,7 +341,6 @@ export class User {
   }
 
   async saveUserInvoice(doc) {
-    lightningPayReq.encode();
     let decoded = lightningPayReq.decode(doc.payment_request);
     let payment_hash;
     for (let tag of decoded.tags) {
