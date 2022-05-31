@@ -4,6 +4,7 @@ var crypto = require('crypto');
 var lightningPayReq = require('bolt11');
 import { BigNumber } from 'bignumber.js';
 import { decodeRawHex } from '../btc-decoder';
+import { network } from '../config';
 const config = require('../config');
 
 // static cache:
@@ -130,6 +131,58 @@ export class User {
         resolve();
       });
     });
+  }
+
+  async createBill(requestId, amount){
+
+    // obtaining a lock
+    console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
+    let lock = new Lock(this._redis, 'creating_bill_for' + this.getUserId());
+    if (!(await lock.obtainLock())) {
+      return errorGeneralServerError(res);
+    }
+
+    // Getting balance
+    console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
+    let userBalance;
+    try {
+      await this.clearBalanceCache();
+      userBalance = await this.getCalculatedBalance();
+    } catch (Error) {
+      logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
+      lock.releaseLock();
+      return errorTryAgainLater(res);
+    }
+
+    // Check balance
+    console.log('Checking balance for generating bill' + requestId + ' userid: '+ this.getUserId())
+    if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
+      await lock.releaseLock();
+      return errorNotEnougBalance(res);
+    }
+
+    // Generate Bill
+    try{
+      let crytpRandomBytes = crypto.randomBytes(20);
+      let token = crytpRandomBytes.toString('hex');
+      let bill = {
+          token: token,
+          amount: amount,
+          timestamp: parseInt(+new Date() / 1000),
+          created_by: this.getUserId()
+      }
+  
+      this.saveBill(token, bill);
+      delete bill.created_by;
+      lock.releaseLock();
+      return bill;
+    } catch (Error) {
+      logger.log('', [requestId, 'error saving bill:', Error.message]);
+      lock.releaseLock();
+      return errorTryAgainLater(res);
+    }
+    
+    
   }
 
   async sendCoins(requestId, amount, address, amountfee) {
@@ -274,7 +327,21 @@ export class User {
     return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
   }
 
+  async saveBill(token, bill) {
+    let data = JSON.stringify(bill);
+    console.log('save data:' + data);
+    await this._redis.set('bill_' + token, data);
+  }
+
+  async getBill(token) {
+    console.log('Token:' + token);
+    let data = await this._redis.get('bill_' + token);
+    console.log('get data:' + data);
+    return JSON.parse(data) 
+  }
+
   async saveUserInvoice(doc) {
+    lightningPayReq.encode();
     let decoded = lightningPayReq.decode(doc.payment_request);
     let payment_hash;
     for (let tag of decoded.tags) {

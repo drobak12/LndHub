@@ -14,16 +14,13 @@
   "license": "MIT",
   "dependencies": {
     "@babel/cli": "^7.14.8",
-    "@babel/core": "^7.15.0",
     "@babel/eslint-parser": "^7.14.2",
-    "@babel/node": "^7.14.9",
     "@babel/preset-env": "^7.15.6",
     "@babel/register": "^7.14.5",
     "@grpc/grpc-js": "^1.3.7",
     "@grpc/proto-loader": "^0.6.5",
     "bignumber.js": "^9.0.1",
     "bitcoinjs-lib": "^5.2.0",
-    "bolt11": "^1.3.2",
     "eslint": "^7.24.0",
     "eslint-config-prettier": "^8.3.0",
     "eslint-plugin-prettier": "^3.4.0",
@@ -33,6 +30,7 @@
     "helmet": "^4.6.0",
     "ioredis": "^4.27.10",
     "jayson": "^3.6.4",
+    "lnurl": "^0.24.1",
     "morgan": "^1.10.0",
     "mustache": "^4.1.0",
     "prettier": "^2.3.0",
@@ -41,5 +39,11 @@
     "request-promise": "^4.2.6",
     "uuid": "^8.3.2",
     "winston": "^3.3.3"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.18.2",
+    "@babel/node": "^7.17.10",
+    "bech32-buffer": "^0.2.0",
+    "bolt11": "^1.4.0"
   }
 }

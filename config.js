@@ -4,6 +4,9 @@ let config = {
   //balance_expire_seconds: 1800,
   balance_expire_seconds: 1,
 
+  callbackHost: 'http://localhost:8989',
+  billUrl: '/bill',
+  billProcessUrl: '/bill/process',
   enableUpdateDescribeGraph: false,
   postRateLimit: 100,
   rateLimit: 200,
@@ -16,7 +19,7 @@ let config = {
     db: 0,
   },
   lnd: {
-    url: '127.0.0.1:100099',
+    url: '127.0.0.1:10009',
   },
 };
 
