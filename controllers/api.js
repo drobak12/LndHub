@@ -185,6 +185,9 @@ router.get('/bill', async function (req, res) {
   
   let token = req.query.token;
   let bill = await u.getBill(token);
+  if(!bill){
+    return billNotFound(res);
+  }
   
   let withDrawRequest = {
     "minWithdrawable": bill.amount,
@@ -307,6 +310,8 @@ router.get('/bill/process', async function (req, res) {
         }
         await lock.releaseLock();
         console.log("Payment successful: " + JSON.stringify(info));
+        
+        u.deleteBill(token);
         return res.send({status:"OK"});
       }
 
@@ -325,6 +330,8 @@ router.get('/bill/process', async function (req, res) {
           await u.clearBalanceCache();
           lock.releaseLock();
           console.log("Payment successful: " + JSON.stringify(payment));
+          
+          u.deleteBill(token);
           return res.send({status:"OK"});
         } else {
           // payment failed
@@ -355,7 +362,7 @@ router.get('/bill/process', async function (req, res) {
     }
   });
   /////////////////////////// END TODO: REFACTOR, SAME CODE IN /PAYINVOICE
-
+  u.deleteBill(token);
   return res.send({status:"OK"});
 });
 
@@ -950,10 +957,18 @@ function errorSunsetAddInvoice(res) {
   });
 }
 
+function billNotFound(res) {
+  return res.send({
+    error: true,
+    code: 12,
+    message: 'Bill not found',
+  });
+}
+
 function errorSendCoins(res, message) {
   return res.send({
     error: true,
-    code: 1,
+    code: 13,
     message: 'Error sending coins:: ' + message,
   });
 }
