@@ -11,7 +11,7 @@ let config = {
   postRateLimit: 100,
   rateLimit: 200,
   forwardReserveFee: 0.01, // default 0.01
-  intraHubFee: 0.003, // default 0.003
+  intraHubFee: 0.001, // default 0.003
   redis: {
     port: 6379,
     host: '127.0.0.1',

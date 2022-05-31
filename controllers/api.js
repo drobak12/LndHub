@@ -1,4 +1,4 @@
-import { User, Lock, Paym, Invo } from '../class/';
+import { User, Lock, Paym, Invo, Totp } from '../class/';
 const lnurl = require('lnurl');
 import Frisbee from 'frisbee';
 import { stringify } from 'uuid';
@@ -791,6 +791,62 @@ router.get('/getchaninfo/:chanid', async function (req, res) {
   }
   res.send('');
 });
+
+
+// ################# OTP ###########################
+router.get('/getotpinfo', async function (req, res) {
+  let u = new User(redis, bitcoinclient, lightning);
+  await u.loadByAuthorization(req.headers.authorization);
+
+  if (!u.getUserId()) {
+    return errorBadAuth(res);
+  }
+
+  key = 'otp_secret_for_' + this._userid;
+
+  secret = await this._redis.get(key)
+  if (!secret)
+  {
+    var totp = new Totp();
+    secret = totp.generateSecret();
+    await redis.set(key, secret);
+  }
+
+  const otp_url = "otpauth://totp/LightningChat?secret="+secret
+  res.send([{ url:otp_url }]);
+});
+
+router.get('/checkotp', async function (req, res) {
+  let u = new User(redis, bitcoinclient, lightning);
+  await u.loadByAuthorization(req.headers.authorization);
+
+  if (!u.getUserId()) {
+    return errorBadAuth(res);
+  }
+  if (!req.body.otp)
+    return errorBadArguments(res);
+
+  otp = req.body.otp;
+  key = 'otp_secret_for_' + this._userid;
+  secret = await this._redis.get(key)
+  if (!secret)
+  {
+    res.send([{ check:false }]);
+    return;
+  }
+
+  var totp = new Totp();
+  var code = totp.getOtp(secret);
+  if (code == otp)
+    res.send([{ check:true }]);
+  else
+    res.send([{ check:false }]);
+
+});
+
+// ################# END OTP ###########################
+
+
 
 module.exports = router;
 
