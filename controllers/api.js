@@ -802,9 +802,8 @@ router.get('/getotpinfo', async function (req, res) {
     return errorBadAuth(res);
   }
 
-  key = 'otp_secret_for_' + this._userid;
-
-  secret = await this._redis.get(key)
+  let key = 'otp_secret_for_' + u.getUserId();
+  let secret = await redis.get(key)
   if (!secret)
   {
     var totp = new Totp();
@@ -826,9 +825,9 @@ router.get('/checkotp', async function (req, res) {
   if (!req.body.otp)
     return errorBadArguments(res);
 
-  otp = req.body.otp;
-  key = 'otp_secret_for_' + this._userid;
-  secret = await this._redis.get(key)
+  let otp = req.body.otp;
+  let key = 'otp_secret_for_' + u.getUserId();
+  let secret = await redis.get(key)
   if (!secret)
   {
     res.send([{ check:false }]);

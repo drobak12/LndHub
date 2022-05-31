@@ -1,3 +1,5 @@
+var crypto = require('crypto');
+
 var Base32SecretGenerator = function()
 {
     /**
@@ -251,7 +253,7 @@ export class Totp
     generateSecret()
     {
       var b = new Base32SecretGenerator();
-      console.log(b.generateSecret());
+      return b.generateSecret();
     };
 
 };
