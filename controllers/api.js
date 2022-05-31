@@ -841,7 +841,7 @@ router.get('/getotpinfo', async function (req, res) {
   res.send([{ url:otp_url }]);
 });
 
-router.get('/checkotp', async function (req, res) {
+router.post('/checkotp', async function (req, res) {
   let u = new User(redis, bitcoinclient, lightning);
   await u.loadByAuthorization(req.headers.authorization);
 
