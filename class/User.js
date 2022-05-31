@@ -633,6 +633,7 @@ export class User {
     let result = [];
     for (let tx of txs) {
       if (tx.confirmations < 3 && tx.address === addr && tx.category === 'receive') {
+        tx.type = 'bitcoind_tx';
         result.push(tx);
       }
     }
