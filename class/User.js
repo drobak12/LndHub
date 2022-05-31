@@ -4,6 +4,7 @@ var crypto = require('crypto');
 var lightningPayReq = require('bolt11');
 import { BigNumber } from 'bignumber.js';
 import { decodeRawHex } from '../btc-decoder';
+import { network } from '../config';
 const config = require('../config');
 
 // static cache:
@@ -132,17 +133,69 @@ export class User {
     });
   }
 
-async sendCoins(requestId, amount, address) {
+  async createBill(requestId, amount){
 
     // obtaining a lock
-console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
+    console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
+    let lock = new Lock(this._redis, 'creating_bill_for' + this.getUserId());
+    if (!(await lock.obtainLock())) {
+      return errorGeneralServerError(res);
+    }
+
+    // Getting balance
+    console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
+    let userBalance;
+    try {
+      //await this.clearBalanceCache();
+      //userBalance = await this.getCalculatedBalance();
+    } catch (Error) {
+      logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
+      lock.releaseLock();
+      return errorTryAgainLater(res);
+    }
+
+    // Check balance
+    /*console.log('Checking balance for generating bill' + requestId + ' userid: '+ this.getUserId())
+    if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
+      await lock.releaseLock();
+      return errorNotEnougBalance(res);
+    }*/
+
+    // Generate Bill
+    try{
+      let crytpRandomBytes = crypto.randomBytes(20);
+      let token = crytpRandomBytes.toString('hex');
+      let bill = {
+          token: token,
+          amount: amount,
+          timestamp: parseInt(+new Date() / 1000),
+          created_by: this.getUserId()
+      }
+  
+      this.saveBill(token, bill);
+      delete bill.created_by;
+      lock.releaseLock();
+      return bill;
+    } catch (Error) {
+      logger.log('', [requestId, 'error saving bill:', Error.message]);
+      lock.releaseLock();
+      return errorTryAgainLater(res);
+    }
+    
+    
+  }
+
+  async sendCoins(requestId, amount, address, amountfee) {
+
+    // obtaining a lock
+    console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
     let lock = new Lock(this._redis, 'generating_address_' + this.getUserId());
     if (!(await lock.obtainLock())) {
       return errorGeneralServerError(res);
     }
 
     // Getting balance
-console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
+    console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
     let userBalance;
     try {
       await this.clearBalanceCache();
@@ -154,34 +207,34 @@ console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
     }
 
     // Check balance
-console.log('Checking balance with transaction amount' + requestId + ' userid: '+ this.getUserId())
+    console.log('Checking balance with transaction amount' + requestId + ' userid: '+ this.getUserId())
     if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
     }
 
-console.log('Executing sendcoins... ' + requestId + ' userid: '+ this.getUserId() + ' address: ' + address + ' amount: ' + amount)
+    console.log('Executing sendcoins... ' + requestId + ' userid: '+ this.getUserId() + ' address: ' + address + ' amount: ' + amount)
     let user= this;
     
     return new Promise(function (resolve, reject) {
       user._lightning.sendCoins({ addr: address, amount: amount }, async function (err, response) {
         if (err) {
-console.log('LND failure when trying to send coins:: ' + err)
-lock.releaseLock();
+          console.log('LND failure when trying to send coins:: ' + err)
+          lock.releaseLock();
           return reject('LND failure when trying to send coins::' + err);
         }
         
-console.log('response.txid::' + response.txid)
-lock.releaseLock();        
-/*        await user.saveSendCoinsTx({
+        console.log('response.txid::' + response.txid)
+        lock.releaseLock();        
+        await user.saveSendCoinsTx({
           timestamp: parseInt(+new Date() / 1000),
           type: 'sendcoins',
-          value: +amount + Math.floor(amount * internalFee),
-          fee: Math.floor(amount * internalFee),
-          memo: 'Send coins to ' + address,
-          pay_req: req.body.invoice,
+          value: amount + amountfee,
+          fee: amountfee,
+          txid: response.txid,
+          memo: 'Send coins to ' + address
         });
-*/
+
         resolve(response.txid);
       });
     });
@@ -270,8 +323,21 @@ lock.releaseLock();
     return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
   }
 
-async saveSendCoinsTx(doc) {
+  async saveSendCoinsTx(doc) {
     return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
+  }
+
+  async saveBill(token, bill) {
+    let data = JSON.stringify(bill);
+    console.log('save data:' + data);
+    await this._redis.set('bill_' + token, data);
+  }
+
+  async getBill(token) {
+    console.log('Token:' + token);
+    let data = await this._redis.get('bill_' + token);
+    console.log('get data:' + data);
+    return JSON.parse(data) 
   }
 
   async saveUserInvoice(doc) {
@@ -434,37 +500,42 @@ async saveSendCoinsTx(doc) {
     let range = await this._redis.lrange('txs_for_' + this._userid, 0, -1);
     for (let invoice of range) {
       invoice = JSON.parse(invoice);
-      invoice.type = 'paid_invoice';
+      if(invoice.type === "sendcoins"){
 
-      // for internal invoices it might not have properties `payment_route`  and `decoded`...
-      if (invoice.payment_route) {
-        invoice.fee = +invoice.payment_route.total_fees;
-        invoice.value = +invoice.payment_route.total_fees + +invoice.payment_route.total_amt;
-        if (invoice.payment_route.total_amt_msat && invoice.payment_route.total_amt_msat / 1000 !== +invoice.payment_route.total_amt) {
-          // okay, we have to account for MSAT
-          invoice.value =
-            +invoice.payment_route.total_fees +
-            Math.max(parseInt(invoice.payment_route.total_amt_msat / 1000), +invoice.payment_route.total_amt) +
-            1; // extra sat to cover for msats, as external layer (clients) dont have that resolution
+      }else{
+        invoice.type = 'paid_invoice';
+
+        // for internal invoices it might not have properties `payment_route`  and `decoded`...
+        if (invoice.payment_route) {
+          invoice.fee = +invoice.payment_route.total_fees;
+          invoice.value = +invoice.payment_route.total_fees + +invoice.payment_route.total_amt;
+          if (invoice.payment_route.total_amt_msat && invoice.payment_route.total_amt_msat / 1000 !== +invoice.payment_route.total_amt) {
+            // okay, we have to account for MSAT
+            invoice.value =
+              +invoice.payment_route.total_fees +
+              Math.max(parseInt(invoice.payment_route.total_amt_msat / 1000), +invoice.payment_route.total_amt) +
+              1; // extra sat to cover for msats, as external layer (clients) dont have that resolution
+          }
+        } else {
+          invoice.fee = 0;
         }
-      } else {
-        invoice.fee = 0;
+        if (invoice.decoded) {
+          invoice.timestamp = invoice.decoded.timestamp;
+          invoice.memo = invoice.decoded.description;
+        }
+        if (invoice.payment_preimage) {
+          invoice.payment_preimage = Buffer.from(invoice.payment_preimage, 'hex').toString('hex');
+        }
+        // removing unsued by client fields to reduce size
+        delete invoice.payment_error;
+        delete invoice.payment_route;
+        delete invoice.pay_req;
+        delete invoice.decoded;
+      
       }
-      if (invoice.decoded) {
-        invoice.timestamp = invoice.decoded.timestamp;
-        invoice.memo = invoice.decoded.description;
-      }
-      if (invoice.payment_preimage) {
-        invoice.payment_preimage = Buffer.from(invoice.payment_preimage, 'hex').toString('hex');
-      }
-      // removing unsued by client fields to reduce size
-      delete invoice.payment_error;
-      delete invoice.payment_route;
-      delete invoice.pay_req;
-      delete invoice.decoded;
+
       result.push(invoice);
     }
-
     return result;
   }
 
@@ -561,6 +632,7 @@ async saveSendCoinsTx(doc) {
     let result = [];
     for (let tx of txs) {
       if (tx.confirmations < 3 && tx.address === addr && tx.category === 'receive') {
+        tx.type = 'bitcoind_tx';
         result.push(tx);
       }
     }

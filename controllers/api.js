@@ -1,5 +1,7 @@
-import { User, Lock, Paym, Invo } from '../class/';
+import { User, Lock, Paym, Invo, Totp } from '../class/';
+const lnurl = require('lnurl');
 import Frisbee from 'frisbee';
+import { stringify } from 'uuid';
 const config = require('../config');
 let express = require('express');
 let router = express.Router();
@@ -93,7 +95,11 @@ const subscribeInvoicesCallCallback = async function (response) {
     
 
       //Lightningchat
-      await redis.rpush('invoice_paid_for_bot', JSON.stringify({user_id: user._userid, amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat}));    
+      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+        user_id: user._userid, 
+        amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
+        time: Math.trunc(new Date().getTime() / 1000)
+      })); 
       //end lightningchat
 
     const baseURI = process.env.GROUNDCONTROL;
@@ -145,6 +151,237 @@ const postLimiter = rateLimit({
   max: config.postRateLimit || 100,
 });
 
+router.post('/bill', postLimiter, async function (req, res) {
+  logger.log('/bill', [req.id]);
+
+  let u = new User(redis, bitcoinclient, lightning);
+  if (!(await u.loadByAuthorization(req.headers.authorization))) {
+    return errorBadAuth(res);
+  }
+  logger.log('/bill', [req.id, 'userid: ' + u.getUserId()]);
+
+  if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+
+  let amount = req.body.amount;
+  
+  try {
+    let host = config.callbackHost;
+    let bill = await u.createBill(req.id, amount, host);
+    let callbackUrl = host + config.billUrl + "?token=" + bill.token
+    const encoded = lnurl.encode(callbackUrl);
+    
+    res.send({bill: bill, bill_request: encoded });
+  } catch (Error) {
+    logger.log('', [req.id, 'error creating bill:', Error.message]);
+    return errorSendCoins(res, Error);
+  }
+});
+
+router.get('/bill', async function (req, res) {
+  logger.log('/bill', [req.id]);
+  let u = new User(redis, bitcoinclient, lightning);
+  
+  if (!req.query.token) return errorBadArguments(res);
+  
+  let token = req.query.token;
+  let bill = await u.getBill(token);
+  
+  let withDrawRequest = {
+    "minWithdrawable": bill.amount,
+    "maxWithdrawable": bill.amount,
+    "defaultDescription": "lnurl-toolbox: withdrawRequest",
+    "callback": config.callbackHost + config.billProcessUrl,
+    "k1": token,
+    "tag": "withdrawRequest"
+  };
+
+  return res.send(withDrawRequest);
+});
+
+
+router.get('/bill/process', async function (req, res) {
+  logger.log('/bill', [req.id]);
+  let u = new User(redis, bitcoinclient, lightning);
+  
+  if (!req.query.k1) return errorBadArguments(res);
+  if (!req.query.pr) return errorBadArguments(res);
+  
+  let token = req.query.k1;
+  let paymentRequest = req.query.pr;
+  let bill = await u.getBill(token);
+  if (!bill) {
+    return errorBadAuth(res);
+  }
+
+  await u.loadByAuthorization(bill.created_by);
+
+  if (!u.getUserId()) {
+    return errorBadAuth(res);
+  }
+  
+  logger.log('/bill/process', [req.id, "Parameters are valid"]);
+  /////////////////////////// TODO: REFACTOR, SAME CODE IN /PAYINVOICE
+  
+  if (!paymentRequest) return errorBadArguments(res);
+  let freeAmount = false;
+  if (req.body.amount) {
+    freeAmount = parseInt(req.body.amount);
+    if (freeAmount <= 0) return errorBadArguments(res);
+  }
+
+  // obtaining a lock
+  let lock = new Lock(redis, 'invoice_paying_for_' + u.getUserId());
+  if (!(await lock.obtainLock())) {
+    return errorGeneralServerError(res);
+  }
+
+  let userBalance;
+  try {
+    userBalance = await u.getCalculatedBalance();
+  } catch (Error) {
+    logger.log('', [req.id, 'error running getCalculatedBalance():', Error.message]);
+    lock.releaseLock();
+    return errorTryAgainLater(res);
+  }
+
+  lightning.decodePayReq({ pay_req: paymentRequest }, async function (err, info) {
+    if (err) {
+      await lock.releaseLock();
+      return errorNotAValidInvoice(res);
+    }
+
+    if (+info.num_satoshis === 0) {
+      // 'tip' invoices
+      info.num_satoshis = freeAmount;
+    }
+
+    logger.log('/payinvoice', [req.id, 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
+
+    if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1) {
+      // got enough balance, including 1% of payment amount - reserve for fees
+
+      if (identity_pubkey === info.destination) {
+        // this is internal invoice
+        // now, receiver add balance
+        let userid_payee = await u.getUseridByPaymentHash(info.payment_hash);
+        if (!userid_payee) {
+          await lock.releaseLock();
+          return errorGeneralServerError(res);
+        }
+
+        if (await u.getPaymentHashPaid(info.payment_hash)) {
+          // this internal invoice was paid, no sense paying it again
+          await lock.releaseLock();
+          return errorLnd(res);
+        }
+
+        let UserPayee = new User(redis, bitcoinclient, lightning);
+        UserPayee._userid = userid_payee; // hacky, fixme
+        await UserPayee.clearBalanceCache();
+
+        // sender spent his balance:
+        await u.clearBalanceCache();
+        await u.savePaidLndInvoice({
+          timestamp: parseInt(+new Date() / 1000),
+          type: 'paid_invoice',
+          value: +info.num_satoshis + Math.floor(info.num_satoshis * internalFee),
+          fee: Math.floor(info.num_satoshis * internalFee),
+          memo: decodeURIComponent(info.description),
+          pay_req: paymentRequest,
+        });
+
+        const invoice = new Invo(redis, bitcoinclient, lightning);
+        invoice.setInvoice(paymentRequest);
+        await invoice.markAsPaidInDatabase();
+
+        // now, faking LND callback about invoice paid:
+        const preimage = await invoice.getPreimage();
+        if (preimage) {
+          subscribeInvoicesCallCallback({
+            state: 'SETTLED',
+            memo: info.description,
+            r_preimage: Buffer.from(preimage, 'hex'),
+            r_hash: Buffer.from(info.payment_hash, 'hex'),
+            amt_paid_sat: +info.num_satoshis,
+          });
+        }
+        await lock.releaseLock();
+        console.log("Payment successful: " + JSON.stringify(info));
+        return res.send({status:"OK"});
+      }
+
+      // else - regular lightning network payment:
+
+      var call = lightning.sendPayment();
+      call.on('data', async function (payment) {
+        // payment callback
+        await u.unlockFunds(paymentRequest);
+        if (payment && payment.payment_route && payment.payment_route.total_amt_msat) {
+          let PaymentShallow = new Paym(false, false, false);
+          payment = PaymentShallow.processSendPaymentResponse(payment);
+          payment.pay_req = paymentRequest;
+          payment.decoded = info;
+          await u.savePaidLndInvoice(payment);
+          await u.clearBalanceCache();
+          lock.releaseLock();
+          console.log("Payment successful: " + JSON.stringify(payment));
+          return res.send({status:"OK"});
+        } else {
+          // payment failed
+          lock.releaseLock();
+          return errorPaymentFailed(res);
+        }
+      });
+      if (!info.num_satoshis) {
+        // tip invoice, but someone forgot to specify amount
+        await lock.releaseLock();
+        return errorBadArguments(res);
+      }
+      let inv = {
+        payment_request: paymentRequest,
+        amt: info.num_satoshis, // amt is used only for 'tip' invoices
+        fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
+      };
+      try {
+        await u.lockFunds(paymentRequest, info);
+        call.write(inv);
+      } catch (Err) {
+        await lock.releaseLock();
+        return errorPaymentFailed(res);
+      }
+    } else {
+      await lock.releaseLock();
+      return errorNotEnougBalance(res);
+    }
+  });
+  /////////////////////////// END TODO: REFACTOR, SAME CODE IN /PAYINVOICE
+
+  return res.send({status:"OK"});
+});
+
+router.get('/bech32/decode', async function (req, res) {
+  logger.log('/bech32/decode', [req.id]);
+  let u = new User(redis, bitcoinclient, lightning);
+  await u.loadByAuthorization(req.headers.authorization);
+
+  if (!u.getUserId()) {
+    return errorBadAuth(res);
+  }
+
+  if (!req.query.value) return errorBadArguments(res);
+  
+  try {
+    let token = req.query.value;
+    const decode = lnurl.decode(token);
+    
+    res.send({decode: decode });
+  } catch (Error) {
+    logger.log('', [req.id, 'error decoding bill bech32:', Error.message]);
+    return errorSendCoins(res, Error);
+  }
+});
+
+
 router.post('/sendcoins', postLimiter, async function (req, res) {
   logger.log('/sendcoins', [req.id]);
 
@@ -159,9 +396,10 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
 
   let amount = req.body.amount;
   let address = req.body.address;
+  let amountfee = Math.floor(amount * internalFee);
 
   try {
-    let txid = await u.sendCoins(req.id, amount, address);
+    let txid = await u.sendCoins(req.id, amount, address, amountfee);
     logger.log('TX Response::' + txid);
     res.send({txid: txid});
   } catch (Error) {
@@ -572,6 +810,61 @@ router.get('/getchaninfo/:chanid', async function (req, res) {
   }
   res.send('');
 });
+
+
+// ################# OTP ###########################
+router.get('/getotpinfo', async function (req, res) {
+  let u = new User(redis, bitcoinclient, lightning);
+  await u.loadByAuthorization(req.headers.authorization);
+
+  if (!u.getUserId()) {
+    return errorBadAuth(res);
+  }
+
+  let key = 'otp_secret_for_' + u.getUserId();
+  let secret = await redis.get(key)
+  if (!secret)
+  {
+    var totp = new Totp();
+    secret = totp.generateSecret();
+    await redis.set(key, secret);
+  }
+
+  const otp_url = "otpauth://totp/LightningChat?secret="+secret
+  res.send([{ url:otp_url }]);
+});
+
+router.get('/checkotp', async function (req, res) {
+  let u = new User(redis, bitcoinclient, lightning);
+  await u.loadByAuthorization(req.headers.authorization);
+
+  if (!u.getUserId()) {
+    return errorBadAuth(res);
+  }
+  if (!req.body.otp)
+    return errorBadArguments(res);
+
+  let otp = req.body.otp;
+  let key = 'otp_secret_for_' + u.getUserId();
+  let secret = await redis.get(key)
+  if (!secret)
+  {
+    res.send([{ check:false }]);
+    return;
+  }
+
+  var totp = new Totp();
+  var code = totp.getOtp(secret);
+  if (code == otp)
+    res.send([{ check:true }]);
+  else
+    res.send([{ check:false }]);
+
+});
+
+// ################# END OTP ###########################
+
+
 
 module.exports = router;
 
