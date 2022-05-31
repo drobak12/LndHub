@@ -333,6 +333,12 @@ export class User {
     await this._redis.set('bill_' + token, data);
   }
 
+  async deleteBill(token, bill) {
+    let data = JSON.stringify(bill);
+    console.log('removing data:' + data);
+    await this._redis.del('bill_' + token, data);
+  }
+
   async getBill(token) {
     console.log('Token:' + token);
     let data = await this._redis.get('bill_' + token);
