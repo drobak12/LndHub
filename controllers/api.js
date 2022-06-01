@@ -94,6 +94,7 @@ const subscribeInvoicesCallCallback = async function (response) {
     console.log('payment', LightningInvoiceSettledNotification.hash, 'was paid, posting to GroundControl...');
     
 
+    if(!response.type){
       //Lightningchat
       await redis.rpush('invoice_paid_for_bot', JSON.stringify({
         user_id: user._userid, 
@@ -101,7 +102,16 @@ const subscribeInvoicesCallCallback = async function (response) {
         time: Math.trunc(new Date().getTime() / 1000)
       })); 
       //end lightningchat
-
+    } else if(response.type === 'bill_pay'){
+      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+        user_id: user._userid, 
+        amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
+        time: Math.trunc(new Date().getTime() / 1000),
+        payer: response.payer,
+        type: response.type 
+      }));
+    }
+      
     const baseURI = process.env.GROUNDCONTROL;
     if (!baseURI) return;
     const _api = new Frisbee({ baseURI: baseURI });
@@ -306,6 +316,8 @@ router.get('/bill/process', async function (req, res) {
             r_preimage: Buffer.from(preimage, 'hex'),
             r_hash: Buffer.from(info.payment_hash, 'hex'),
             amt_paid_sat: +info.num_satoshis,
+            type: 'bill_pay',
+            payer: u.getUserId()
           });
         }
         await lock.releaseLock();
