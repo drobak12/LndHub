@@ -417,7 +417,14 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
   let address = req.body.address;
   let amountfee = Math.floor(amount * internalFee);
 
+
   try {
+
+    let matchAddressLocal = await u.matchAddressWithLocalInformation(address);
+    if(matchAddressLocal){
+      return errorSendCoinsMatchLocalAddress(res, '');
+    }
+
     let txid = await u.sendCoins(req.id, amount, address, amountfee);
     logger.log('TX Response::' + txid);
     res.send({txid: txid});
@@ -982,5 +989,13 @@ function errorSendCoins(res, message) {
     error: true,
     code: 13,
     message: 'Error sending coins:: ' + message,
+  });
+}
+
+function errorSendCoinsMatchLocalAddress(res, message) {
+  return res.send({
+    error: true,
+    code: 14,
+    message: 'Please use Lightning Chat for sending balance between users',
   });
 }
