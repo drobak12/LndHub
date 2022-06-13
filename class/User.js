@@ -5,6 +5,7 @@ var lightningPayReq = require('bolt11');
 import { BigNumber } from 'bignumber.js';
 import { decodeRawHex } from '../btc-decoder';
 import { network } from '../config';
+import { add } from 'winston';
 const config = require('../config');
 
 // static cache:
@@ -464,6 +465,7 @@ export class User {
   }
 
   async addAddress(address) {
+    this._redis.key()
     await this._redis.set('bitcoin_address_for_' + this._userid, address);
   }
 
@@ -760,6 +762,23 @@ export class User {
     }
     if (!addr) throw new Error('cannot get transactions: no onchain address assigned to user');
     return addr;
+  }
+
+  async retrieveKeysAddress() {
+    return await this._redis.keys('bitcoin_address_for_*');
+  }
+
+  async matchAddressWithLocalInformation(address){
+    let keys = await this.retrieveKeysAddress();
+    console.log('KEYS:: ' + JSON.stringify(keys));
+    
+    for( let key of keys ){
+      let userAddress = await this._redis.get(key);
+      if(userAddress === address){
+        return true;
+      }
+    }
+    return false;
   }
 
   _hash(string) {
