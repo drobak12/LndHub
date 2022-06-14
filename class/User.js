@@ -465,7 +465,6 @@ export class User {
   }
 
   async addAddress(address) {
-    this._redis.key()
     await this._redis.set('bitcoin_address_for_' + this._userid, address);
   }
 
