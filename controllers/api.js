@@ -601,8 +601,12 @@ router.post('/payinvoice', async function (req, res) {
 
       // else - regular lightning network payment:
 
+      console.log('Payment Invoice: Payment external invoice...');
       var call = lightning.sendPayment();
       call.on('data', async function (payment) {
+
+        console.log('Payment Invoice: processiong response from LND...');
+
         // payment callback
         await u.unlockFunds(req.body.invoice);
         if (payment && payment.payment_route && payment.payment_route.total_amt_msat) {
@@ -616,6 +620,7 @@ router.post('/payinvoice', async function (req, res) {
           res.send(payment);
         } else {
           // payment failed
+          console.log('Payment Invoice: Failed...');
           lock.releaseLock();
           return errorPaymentFailed(res);
         }
@@ -631,8 +636,11 @@ router.post('/payinvoice', async function (req, res) {
         fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
       };
       try {
+        console.log('Payment Invoice: before lock funds...');
         await u.lockFunds(req.body.invoice, info);
+        console.log('Payment Invoice: about lock funds...');
         call.write(inv);
+        console.log('Payment Invoice: After write...');
       } catch (Err) {
         await lock.releaseLock();
         return errorPaymentFailed(res);
@@ -641,7 +649,13 @@ router.post('/payinvoice', async function (req, res) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
     }
+
+    console.log('Payment Invoice: Finish decodePayReq...');
+
   });
+
+  console.log('Payment Invoice: Finish method...');
+
 });
 
 router.get('/getbtc', async function (req, res) {
