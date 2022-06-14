@@ -374,8 +374,6 @@ router.get('/bill/process', async function (req, res) {
     }
   });
   /////////////////////////// END TODO: REFACTOR, SAME CODE IN /PAYINVOICE
-  u.deleteBill(token);
-  return res.send({status:"OK"});
 });
 
 router.get('/bech32/decode', async function (req, res) {
