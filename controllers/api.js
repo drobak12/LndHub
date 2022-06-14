@@ -245,7 +245,7 @@ router.get('/bill/process', async function (req, res) {
   // obtaining a lock
   let lock = new Lock(redis, 'invoice_paying_for_' + u.getUserId());
   if (!(await lock.obtainLock())) {
-    return errorGeneralServerError(res);
+    return errorLockUser(res);
   }
 
   let userBalance;
@@ -522,7 +522,7 @@ router.post('/payinvoice', async function (req, res) {
   // obtaining a lock
   let lock = new Lock(redis, 'invoice_paying_for_' + u.getUserId());
   if (!(await lock.obtainLock())) {
-    return errorGeneralServerError(res);
+    return errorLockUser(res);
   }
 
   let userBalance;
@@ -995,5 +995,13 @@ function errorSendCoinsMatchLocalAddress(res, message) {
     error: true,
     code: 14,
     message: 'Please use Lightning Chat for sending balance between users',
+  });
+}
+
+function errorLockUser(res) {
+  return res.send({
+    error: true,
+    code: 15,
+    message: 'User has a active session!',
   });
 }

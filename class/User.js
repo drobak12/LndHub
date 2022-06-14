@@ -140,7 +140,7 @@ export class User {
     console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
     let lock = new Lock(this._redis, 'creating_bill_for' + this.getUserId());
     if (!(await lock.obtainLock())) {
-      return errorGeneralServerError(res);
+      return errorLockUser(res);
     }
 
     // Getting balance
@@ -156,11 +156,12 @@ export class User {
     }
 
     // Check balance
-    /*console.log('Checking balance for generating bill' + requestId + ' userid: '+ this.getUserId())
+    /*
     if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
-    }*/
+    }
+    */
 
     // Generate Bill
     try{
@@ -192,7 +193,7 @@ export class User {
     console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
     let lock = new Lock(this._redis, 'generating_address_' + this.getUserId());
     if (!(await lock.obtainLock())) {
-      return errorGeneralServerError(res);
+      return errorLockUser(res);
     }
 
     // Getting balance
