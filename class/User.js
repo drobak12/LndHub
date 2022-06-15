@@ -156,13 +156,11 @@ export class User {
     }
 
     // Check balance
-    /*
     if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
     }
-    */
-
+  
     // Generate Bill
     try{
       let crytpRandomBytes = crypto.randomBytes(20);
@@ -769,15 +767,18 @@ export class User {
 
   async matchAddressWithLocalInformation(address){
     let keys = await this.retrieveKeysAddress();
-    console.log('KEYS:: ' + JSON.stringify(keys));
-    
-    for( let key of keys ){
-      let userAddress = await this._redis.get(key);
-      if(userAddress === address){
-        return true;
+    let match = await this._redis.mget(keys).then((resultValues) => {
+      
+      for( let value of resultValues ){
+        if(value === address){
+          return true;
+        }
       }
-    }
-    return false;
+      return false;
+  
+    });
+
+    return match;
   }
 
   _hash(string) {

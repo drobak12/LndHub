@@ -161,6 +161,49 @@ const postLimiter = rateLimit({
   max: config.postRateLimit || 100,
 });
 
+router.post('/estimatefee', postLimiter, async function (req, res) {
+  logger.log('/estimatefee', [req.id]);
+
+  let u = new User(redis, bitcoinclient, lightning);
+  if (!(await u.loadByAuthorization(req.headers.authorization))) {
+    return errorBadAuth(res);
+  }
+  logger.log('/estimatefee', [req.id, 'userid: ' + u.getUserId()]);
+
+  if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+  if (!req.body.address) return errorBadArguments(res);
+
+  let amount = req.body.amount;
+  let address = req.body.address;
+  
+  try {
+    let map = new Map();
+    map[address] = amount;
+
+    let request = { AddrToAmount: map, target_conf: 3 }
+    console.log('Request'+  JSON.stringify(request));
+    lightning.estimateFee(
+      request, async function (err, info) {
+        if (err){
+          console.error(err);
+          return errorLndEstimateFee(res, 'Code: ' + err.code + '... Message: ' + err.details);
+        }
+  
+        res.send(
+          {
+            fee_sat: info.fee_sat,
+            feerate_sat_per_byte: info.feerate_sat_per_byte
+          }
+        );
+      },
+    );
+
+  } catch (Error) {
+    logger.log('', [req.id, 'Error getting estimate fee:', Error.message]);
+    return errorSendCoins(res, Error);
+  }
+});
+
 router.post('/bill', postLimiter, async function (req, res) {
   logger.log('/bill', [req.id]);
 
@@ -413,9 +456,7 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
 
   let amount = req.body.amount;
   let address = req.body.address;
-  let amountfee = Math.floor(amount * internalFee);
-
-
+  
   try {
 
     let matchAddressLocal = await u.matchAddressWithLocalInformation(address);
@@ -423,9 +464,24 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
       return errorSendCoinsMatchLocalAddress(res, '');
     }
 
-    let txid = await u.sendCoins(req.id, amount, address, amountfee);
-    logger.log('TX Response::' + txid);
-    res.send({txid: txid});
+    let map = new Map();
+    map[address] = amount;
+
+    let request = { AddrToAmount: map, target_conf: 3 }
+    lightning.estimateFee(
+      request, async function (err, info) {
+        if (err){
+          console.error(err);
+          return errorLndEstimateFee(res, 'Code: ' + err.code + '... Message: ' + err.details);
+        }
+  
+        let txid = await u.sendCoins(req.id, amount, address, parseInt(info.fee_sat));
+        logger.log('TX Response::' + txid);
+        res.send({txid: txid});
+      },
+    );
+
+    
   } catch (Error) {
     logger.log('', [req.id, 'error executing sendcoins:', Error.message]);
     return errorSendCoins(res, Error);
@@ -625,6 +681,7 @@ router.post('/payinvoice', async function (req, res) {
           return errorPaymentFailed(res);
         }
       });
+
       if (!info.num_satoshis) {
         // tip invoice, but someone forgot to specify amount
         await lock.releaseLock();
@@ -1017,5 +1074,13 @@ function errorLockUser(res) {
     error: true,
     code: 15,
     message: 'User has a active session!',
+  });
+}
+
+function errorLndEstimateFee(res, message) {
+  return res.send({
+    error: true,
+    code: 16,
+    message: 'LND failue: ' + message,
   });
 }
