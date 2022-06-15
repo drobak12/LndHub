@@ -140,7 +140,7 @@ export class User {
     console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
     let lock = new Lock(this._redis, 'creating_bill_for' + this.getUserId());
     if (!(await lock.obtainLock())) {
-      return errorGeneralServerError(res);
+      return errorLockUser(res);
     }
 
     // Getting balance
@@ -156,12 +156,11 @@ export class User {
     }
 
     // Check balance
-    /*console.log('Checking balance for generating bill' + requestId + ' userid: '+ this.getUserId())
     if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
-    }*/
-
+    }
+  
     // Generate Bill
     try{
       let crytpRandomBytes = crypto.randomBytes(20);
@@ -192,7 +191,7 @@ export class User {
     console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
     let lock = new Lock(this._redis, 'generating_address_' + this.getUserId());
     if (!(await lock.obtainLock())) {
-      return errorGeneralServerError(res);
+      return errorLockUser(res);
     }
 
     // Getting balance
@@ -464,7 +463,6 @@ export class User {
   }
 
   async addAddress(address) {
-    this._redis.key()
     await this._redis.set('bitcoin_address_for_' + this._userid, address);
   }
 
@@ -769,15 +767,18 @@ export class User {
 
   async matchAddressWithLocalInformation(address){
     let keys = await this.retrieveKeysAddress();
-    console.log('KEYS:: ' + JSON.stringify(keys));
-    
-    for( let key of keys ){
-      let userAddress = await this._redis.get(key);
-      if(userAddress === address){
-        return true;
+    let match = await this._redis.mget(keys).then((resultValues) => {
+      
+      for( let value of resultValues ){
+        if(value === address){
+          return true;
+        }
       }
-    }
-    return false;
+      return false;
+  
+    });
+
+    return match;
   }
 
   _hash(string) {

@@ -161,6 +161,49 @@ const postLimiter = rateLimit({
   max: config.postRateLimit || 100,
 });
 
+router.post('/estimatefee', postLimiter, async function (req, res) {
+  logger.log('/estimatefee', [req.id]);
+
+  let u = new User(redis, bitcoinclient, lightning);
+  if (!(await u.loadByAuthorization(req.headers.authorization))) {
+    return errorBadAuth(res);
+  }
+  logger.log('/estimatefee', [req.id, 'userid: ' + u.getUserId()]);
+
+  if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+  if (!req.body.address) return errorBadArguments(res);
+
+  let amount = req.body.amount;
+  let address = req.body.address;
+  
+  try {
+    let map = new Map();
+    map[address] = amount;
+
+    let request = { AddrToAmount: map, target_conf: 3 }
+    console.log('Request'+  JSON.stringify(request));
+    lightning.estimateFee(
+      request, async function (err, info) {
+        if (err){
+          console.error(err);
+          return errorLndEstimateFee(res, 'Code: ' + err.code + '... Message: ' + err.details);
+        }
+  
+        res.send(
+          {
+            fee_sat: info.fee_sat,
+            feerate_sat_per_byte: info.feerate_sat_per_byte
+          }
+        );
+      },
+    );
+
+  } catch (Error) {
+    logger.log('', [req.id, 'Error getting estimate fee:', Error.message]);
+    return errorSendCoins(res, Error);
+  }
+});
+
 router.post('/bill', postLimiter, async function (req, res) {
   logger.log('/bill', [req.id]);
 
@@ -245,7 +288,7 @@ router.get('/bill/process', async function (req, res) {
   // obtaining a lock
   let lock = new Lock(redis, 'invoice_paying_for_' + u.getUserId());
   if (!(await lock.obtainLock())) {
-    return errorGeneralServerError(res);
+    return errorLockUser(res);
   }
 
   let userBalance;
@@ -413,9 +456,7 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
 
   let amount = req.body.amount;
   let address = req.body.address;
-  let amountfee = Math.floor(amount * internalFee);
-
-
+  
   try {
 
     let matchAddressLocal = await u.matchAddressWithLocalInformation(address);
@@ -423,9 +464,24 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
       return errorSendCoinsMatchLocalAddress(res, '');
     }
 
-    let txid = await u.sendCoins(req.id, amount, address, amountfee);
-    logger.log('TX Response::' + txid);
-    res.send({txid: txid});
+    let map = new Map();
+    map[address] = amount;
+
+    let request = { AddrToAmount: map, target_conf: 3 }
+    lightning.estimateFee(
+      request, async function (err, info) {
+        if (err){
+          console.error(err);
+          return errorLndEstimateFee(res, 'Code: ' + err.code + '... Message: ' + err.details);
+        }
+  
+        let txid = await u.sendCoins(req.id, amount, address, parseInt(info.fee_sat));
+        logger.log('TX Response::' + txid);
+        res.send({txid: txid});
+      },
+    );
+
+    
   } catch (Error) {
     logger.log('', [req.id, 'error executing sendcoins:', Error.message]);
     return errorSendCoins(res, Error);
@@ -522,7 +578,7 @@ router.post('/payinvoice', async function (req, res) {
   // obtaining a lock
   let lock = new Lock(redis, 'invoice_paying_for_' + u.getUserId());
   if (!(await lock.obtainLock())) {
-    return errorGeneralServerError(res);
+    return errorLockUser(res);
   }
 
   let userBalance;
@@ -601,8 +657,12 @@ router.post('/payinvoice', async function (req, res) {
 
       // else - regular lightning network payment:
 
+      console.log('Payment Invoice: Payment external invoice...');
       var call = lightning.sendPayment();
       call.on('data', async function (payment) {
+
+        console.log('Payment Invoice: processiong response from LND...');
+
         // payment callback
         await u.unlockFunds(req.body.invoice);
         if (payment && payment.payment_route && payment.payment_route.total_amt_msat) {
@@ -616,10 +676,12 @@ router.post('/payinvoice', async function (req, res) {
           res.send(payment);
         } else {
           // payment failed
+          console.log('Payment Invoice: Failed...');
           lock.releaseLock();
           return errorPaymentFailed(res);
         }
       });
+
       if (!info.num_satoshis) {
         // tip invoice, but someone forgot to specify amount
         await lock.releaseLock();
@@ -631,8 +693,11 @@ router.post('/payinvoice', async function (req, res) {
         fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
       };
       try {
+        console.log('Payment Invoice: before lock funds...');
         await u.lockFunds(req.body.invoice, info);
+        console.log('Payment Invoice: about lock funds...');
         call.write(inv);
+        console.log('Payment Invoice: After write...');
       } catch (Err) {
         await lock.releaseLock();
         return errorPaymentFailed(res);
@@ -641,7 +706,13 @@ router.post('/payinvoice', async function (req, res) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
     }
+
+    console.log('Payment Invoice: Finish decodePayReq...');
+
   });
+
+  console.log('Payment Invoice: Finish method...');
+
 });
 
 router.get('/getbtc', async function (req, res) {
@@ -995,5 +1066,21 @@ function errorSendCoinsMatchLocalAddress(res, message) {
     error: true,
     code: 14,
     message: 'Please use Lightning Chat for sending balance between users',
+  });
+}
+
+function errorLockUser(res) {
+  return res.send({
+    error: true,
+    code: 15,
+    message: 'User has a active session!',
+  });
+}
+
+function errorLndEstimateFee(res, message) {
+  return res.send({
+    error: true,
+    code: 16,
+    message: 'LND failue: ' + message,
   });
 }
