@@ -9,7 +9,6 @@ const qr = require('qr-image');
 let lightningGetInfo = {};
 let lightningListChannels = {};
 function updateLightning() {
-  console.log('updateLightning()');
   try {
     lightning.getInfo({}, function (err, info) {
       if (err) {
@@ -26,7 +25,6 @@ function updateLightning() {
         process.exit(4);
         return;
       }
-      console.log('updated');
       lightningListChannels = response;
       let channels = [];
       let max_chan_capacity = -1;

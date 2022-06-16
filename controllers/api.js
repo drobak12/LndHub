@@ -162,8 +162,6 @@ const postLimiter = rateLimit({
 });
 
 router.post('/estimatefee', postLimiter, async function (req, res) {
-  logger.log('/estimatefee', [req.id]);
-
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
     return errorBadAuth(res);
@@ -205,13 +203,11 @@ router.post('/estimatefee', postLimiter, async function (req, res) {
 });
 
 router.post('/bill', postLimiter, async function (req, res) {
-  logger.log('/bill', [req.id]);
-
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
     return errorBadAuth(res);
   }
-  logger.log('/bill', [req.id, 'userid: ' + u.getUserId()]);
+  logger.log('/bill (post)', [req.id, 'userid: ' + u.getUserId()]);
 
   if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
 
@@ -231,7 +227,7 @@ router.post('/bill', postLimiter, async function (req, res) {
 });
 
 router.get('/bill', async function (req, res) {
-  logger.log('/bill', [req.id]);
+  logger.log('/bill (get)', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   
   if (!req.query.token) return errorBadArguments(res);
@@ -256,7 +252,6 @@ router.get('/bill', async function (req, res) {
 
 
 router.get('/bill/process', async function (req, res) {
-  logger.log('/bill', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   
   if (!req.query.k1) return errorBadArguments(res);
@@ -443,8 +438,6 @@ router.get('/bech32/decode', async function (req, res) {
 
 
 router.post('/sendcoins', postLimiter, async function (req, res) {
-  logger.log('/sendcoins', [req.id]);
-
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
     return errorBadAuth(res);
@@ -533,7 +526,6 @@ router.post('/auth', postLimiter, async function (req, res) {
 });
 
 router.post('/addinvoice', postLimiter, async function (req, res) {
-  logger.log('/addinvoice', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
     return errorBadAuth(res);
@@ -756,7 +748,6 @@ router.get('/checkpayment/:payment_hash', async function (req, res) {
 router.get('/balance', postLimiter, async function (req, res) {
   let u = new User(redis, bitcoinclient, lightning);
   try {
-    logger.log('/balance', [req.id]);
     if (!(await u.loadByAuthorization(req.headers.authorization))) {
       return errorBadAuth(res);
     }
@@ -787,7 +778,6 @@ router.get('/getinfo', postLimiter, async function (req, res) {
 });
 
 router.get('/gettxs', async function (req, res) {
-  logger.log('/gettxs', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
     return errorBadAuth(res);
@@ -816,7 +806,6 @@ router.get('/gettxs', async function (req, res) {
 });
 
 router.get('/getuserinvoices', postLimiter, async function (req, res) {
-  logger.log('/getuserinvoices', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
     return errorBadAuth(res);
@@ -833,7 +822,6 @@ router.get('/getuserinvoices', postLimiter, async function (req, res) {
 });
 
 router.get('/getpending', async function (req, res) {
-  logger.log('/getpending', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
     return errorBadAuth(res);
@@ -949,12 +937,15 @@ router.post('/checkotp', async function (req, res) {
   }
 
   var totp = new Totp();
-  var code = totp.getOtp(secret);
-  if (code == otp)
-    res.send([{ check:true }]);
-  else
-    res.send([{ check:false }]);
-
+ 
+  var result = (totp.getOtp(secret,0) == otp)
+  if (!result)
+      result = (totp.getOtp(secret,-1) == otp)
+  if (!result)
+    result = (totp.getOtp(secret,1) == otp)
+    
+  res.send([{ check:result }]);
+         
 });
 
 // ################# END OTP ###########################

@@ -43,9 +43,7 @@ let bodyParser = require('body-parser');
 app.use(bodyParser.urlencoded({ extended: false })); // parse application/x-www-form-urlencoded
 app.use(bodyParser.json(null)); // parse application/json
 
-app.use('/static', express.static('static'));
 app.use(require('./controllers/api'));
-app.use(require('./controllers/website'));
 
 const bindHost = process.env.HOST || '0.0.0.0';
 const bindPort = process.env.PORT || 8989;
