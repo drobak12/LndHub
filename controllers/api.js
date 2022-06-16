@@ -949,12 +949,15 @@ router.post('/checkotp', async function (req, res) {
   }
 
   var totp = new Totp();
-  var code = totp.getOtp(secret);
-  if (code == otp)
-    res.send([{ check:true }]);
-  else
-    res.send([{ check:false }]);
-
+ 
+  var result = (totp.getOtp(secret,0) == otp)
+  if (!result)
+      result = (totp.getOtp(secret,-1) == otp)
+  if (!result)
+    result = (totp.getOtp(secret,1) == otp)
+    
+  res.send([{ check:result }]);
+         
 });
 
 // ################# END OTP ###########################
