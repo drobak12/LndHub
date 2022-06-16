@@ -224,7 +224,10 @@ export class Totp
       return str;
     }
 
-    getOtp(secret, now = new Date().getTime()) {
+    getOtp(secret, window = 0) 
+	{
+	  var now = new Date().getTime() + window * 30000;
+	  
       var epoch, hmac, key, offset, otp, shaObj, time;
       key = this.base32tohex(secret);
       epoch = Math.round(now / 1000.0);
