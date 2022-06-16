@@ -28,6 +28,12 @@ const limiter = rateLimit({
 app.use(limiter);
 
 app.use(function (req, res, next) {
+
+  if(req.headers.secret !== config.secret){
+    res.status(500).send();
+    return;
+  }
+
   req.id = uuidv4();
   next();
 });
