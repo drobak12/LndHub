@@ -7,9 +7,9 @@ let express = require('express');
 let router = express.Router();
 let logger = require('../utils/logger');
 const MIN_BTC_BLOCK = 670000;
-if (process.env.NODE_ENV !== 'prod') {
+/*if (process.env.NODE_ENV !== 'prod') {
   console.log('using config', JSON.stringify(config));
-}
+}*/
 
 var Redis = require('ioredis');
 var redis = new Redis(config.redis);
@@ -52,7 +52,7 @@ lightning.getInfo({}, function (err, info) {
     process.exit(3);
   }
   if (info) {
-    console.info('lnd getinfo:', info);
+    //console.info('lnd getinfo:', info);
     if (!info.synced_to_chain && !config.forceStart) {
       console.error('lnd not synced');
       // process.exit(4);
