@@ -708,6 +708,7 @@ router.post('/payinvoice', async function (req, res) {
 });
 
 router.get('/getbtc', async function (req, res) {
+
   logger.log('/getbtc', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   await u.loadByAuthorization(req.headers.authorization);

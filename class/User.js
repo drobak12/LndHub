@@ -147,8 +147,8 @@ export class User {
     console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
     let userBalance;
     try {
-      //await this.clearBalanceCache();
-      //userBalance = await this.getCalculatedBalance();
+      await this.clearBalanceCache();
+      userBalance = await this.getCalculatedBalance();
     } catch (Error) {
       logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
       lock.releaseLock();

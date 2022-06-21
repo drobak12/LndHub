@@ -28,6 +28,16 @@ const limiter = rateLimit({
 app.use(limiter);
 
 app.use(function (req, res, next) {
+  
+  let endpoint = req.url.split('?');
+  let path = endpoint[0];
+  if(path !== '/bill' && path !== '/bill/process') {
+    if(req.headers.secret !== config.secret){
+      res.status(500).send();
+      return;
+    }
+  }
+  
   req.id = uuidv4();
   next();
 });

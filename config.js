@@ -3,7 +3,7 @@ let config = {
   network: bitcoin.networks.regtest,
   //balance_expire_seconds: 1800,
   balance_expire_seconds: 1,
-
+  secret: 'ULaKw6OCW7DNagBssWzcIZr8OEsiI1bukZU8hTHNvulxH5umtAZu2ypT7Ir0qzUUUdPbMfzictFVbAyOxYP8sJuDoyQLBoKadeNx',
   callbackHost: 'http://localhost:8989',
   billUrl: '/bill',
   billProcessUrl: '/bill/process',
