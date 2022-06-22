@@ -2,6 +2,7 @@ import { User, Lock, Paym, Invo, Totp } from '../class/';
 const lnurl = require('lnurl');
 import Frisbee from 'frisbee';
 import { stringify } from 'uuid';
+import { response } from 'express';
 const config = require('../config');
 let express = require('express');
 let router = express.Router();
@@ -67,6 +68,8 @@ redis.info(function (err, info) {
     process.exit(5);
   }
 });
+
+// ######################## PAY INVOICE - CALLBACK  ########################
 
 const subscribeInvoicesCallCallback = async function (response) {
   if (response.state === 'SETTLED') {
@@ -139,6 +142,180 @@ subscribeInvoicesCall.on('status', function (status) {
 subscribeInvoicesCall.on('end', function () {
   // The server has closed the stream.
 });
+
+// ######################## PAY INVOICE - SEND PAYMENT  ########################
+
+const processPayPaymentCallback = async function (payment){
+  try{
+
+    if(!payment){
+      console.error('Payment is not defined...');
+      return;
+    }
+
+    let paymentHash = payment.payment_hash.toString('hex');
+    console.log();
+    logger.log('Processing callback payment invoice', [paymentHash]);
+
+    let payInformationString = await redis.get(paymentHash);
+    let payInformation = JSON.parse(payInformationString);
+    
+    let seconds = (new Date() - new Date(payInformation.date)) / 1000; 
+    logger.log('Time(seconds): ' + seconds, [paymentHash]);
+
+    let u = new User(redis, bitcoinclient, lightning);
+    if (!(await u.loadByAuthorization(payInformation.user))) {
+      logger.error('Error loading user... ' + payInformation.users, [paymentHash]);
+      return;
+    }
+
+    await u.unlockFunds(payInformation.invoice);
+    
+    if (payment && payment.payment_route && payment.payment_route.total_amt_msat) {
+      let PaymentShallow = new Paym(false, false, false);
+      payment = PaymentShallow.processSendPaymentResponse(payment);
+      payment.pay_req = payInformation.invoice;
+      payment.decoded = payInformation.payment_request;
+      await u.savePaidLndInvoice(payment);
+      await u.clearBalanceCache();
+      await redis.del(payment.payment_hash);
+      logger.log('Payment successful', [paymentHash]);
+
+      let notification = {
+        error: false,
+        payment_hash: paymentHash,
+        user_id: u.getUserId(), 
+        total_amount: payment.payment_route.total_amt,
+        fee: payment.payment_route.total_fees,
+        time: Math.trunc(new Date().getTime() / 1000)
+      };
+      publishPaymentV2(notification);
+      logger.log('Notification sent', [paymentHash]);
+
+    } else {
+      // payment failed
+      await redis.del(paymentHash);
+      logger.error('Payment Invoice Failed... Error: ' + payment.payment_error, [paymentHash]);
+
+      let notification = {
+        error: true,
+        error_code: retrieveErrorCode(payment),
+        error_message: payment.payment_error,
+        payment_hash: paymentHash,
+        user_id: u.getUserId(), 
+        time: Math.trunc(new Date().getTime() / 1000)
+      };
+      publishPaymentV2(notification);
+      logger.log('Notification sent', [paymentHash]);
+    }
+
+
+  }catch(Error){
+    logger.error('General error with callback payment invoice V2... Error: ' + JSON.stringify(Error) , [paymentHash]);
+  }
+  
+}
+
+const callPaymentInvoiceInternal = async function (response) {
+  if (response.state === 'SETTLED') {
+    const LightningInvoiceSettledNotification = {
+      memo: response.memo,
+      preimage: response.r_preimage.toString('hex'),
+      hash: response.r_hash.toString('hex'),
+      amt_paid_sat: response.amt_paid_msat ? Math.floor(response.amt_paid_msat / 1000) : response.amt_paid_sat,
+    };
+    // obtaining a lock, to make sure we push to groundcontrol only once
+    // since this web server can have several instances running, and each will get the same callback from LND
+    // and dont release the lock - it will autoexpire in a while
+    let lock = new Lock(redis, 'groundcontrol_hash_' + LightningInvoiceSettledNotification.hash);
+    if (!(await lock.obtainLock())) {
+      return;
+    }
+    let invoice = new Invo(redis, bitcoinclient, lightning);
+    await invoice._setIsPaymentHashPaidInDatabase(
+      LightningInvoiceSettledNotification.hash,
+      LightningInvoiceSettledNotification.amt_paid_sat || 1,
+    );
+    const user = new User(redis, bitcoinclient, lightning);
+    user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
+    await user.clearBalanceCache();
+    console.log('payment', LightningInvoiceSettledNotification.hash, 'was paid, posting to GroundControl...');
+    
+
+    if(!response.type){
+      //Lightningchat
+      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+        user_id: user._userid, 
+        amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
+        time: Math.trunc(new Date().getTime() / 1000)
+      })); 
+      //end lightningchat
+    } else if(response.type === 'bill_pay'){
+      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+        user_id: user._userid, 
+        amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
+        time: Math.trunc(new Date().getTime() / 1000),
+        payer: response.payer,
+        type: response.type 
+      }));
+    }
+      
+    const baseURI = process.env.GROUNDCONTROL;
+    if (!baseURI) return;
+    const _api = new Frisbee({ baseURI: baseURI });
+    const apiResponse = await _api.post(
+      '/lightningInvoiceGotSettled',
+      Object.assign(
+        {},
+        {
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json',
+          },
+          body: LightningInvoiceSettledNotification,
+        },
+      ),
+    );
+    console.log('GroundControl:', apiResponse.originalResponse.status);
+  }
+};
+
+function retrieveErrorCode(payment){
+  if (payment.payment_error && payment.payment_error.indexOf('already paid') !== -1) {
+    return PaymentInvoiceError.ALREADY_PAYMENT;
+  } else if (payment.payment_error && payment.payment_error.indexOf('unable to') !== -1) {
+    return PaymentInvoiceError.UNABLE_TO;
+  } else if (payment.payment_error && payment.payment_error.indexOf('FinalExpiryTooSoon') !== -1) {
+    return PaymentInvoiceError.FINAL_EXPIRY_TOO_SOON;
+  } else if (payment.payment_error && payment.payment_error.indexOf('UnknownPaymentHash') !== -1) {
+    return PaymentInvoiceError.UNKOWN_PAYMENT_HASH;
+  } else if (payment.payment_error && payment.payment_error.indexOf('IncorrectOrUnknownPaymentDetails') !== -1) {
+    return PaymentInvoiceError.INCORRECT_PAYMENT_DETAILS;
+  } else if (payment.payment_error && payment.payment_error.indexOf('payment is in transition') !== -1) {
+    return PaymentInvoiceError.PAYMENT_IS_IN_TRANSACTION;
+  }
+
+  return PaymentInvoiceError.UNKOWN;
+}
+
+function publishPaymentV2(paymentNotification){
+  redis.rpush('v2_invoice_paid_for_bot', JSON.stringify(paymentNotification));
+}
+
+var callPayInvoice = lightning.sendPayment({});
+callPayInvoice.on('data', processPayPaymentCallback);
+
+const PaymentInvoiceError = {
+	ALREADY_PAYMENT: 1,
+	UNABLE_TO: 2,
+	FINAL_EXPIRY_TOO_SOON: 3,
+	UNKOWN_PAYMENT_HASH: 4,
+  INCORRECT_PAYMENT_DETAILS: 5,
+  PAYMENT_IS_IN_TRANSACTION: 6,
+  UNKOWN: -1
+}
+
+// ######################## DESCRIBE GRAPH  ########################
 
 let lightningDescribeGraph = {};
 function updateDescribeGraph() {
@@ -560,6 +737,153 @@ router.post('/addinvoice', postLimiter, async function (req, res) {
   );
 });
 
+router.post('/v2/payinvoice', async function (req, res) {
+  let u = new User(redis, bitcoinclient, lightning);
+  if (!(await u.loadByAuthorization(req.headers.authorization))) {
+    return errorBadAuth(res);
+  }
+
+  logger.log('/v2/payinvoice', [req.id, 'userid: ' + u.getUserId(), 'invoice: ' + req.body.invoice]);
+
+  if (!req.body.invoice) return errorBadArguments(res);
+  let freeAmount = false;
+  if (req.body.amount) {
+    freeAmount = parseInt(req.body.amount);
+    if (freeAmount <= 0) return errorBadArguments(res);
+  }
+
+  // obtaining a lock
+  let lock = new Lock(redis, 'v2_invoice_paying_for_' + u.getUserId());
+  if (!(await lock.obtainLock())) {
+    return errorLockUser(res);
+  }
+
+  let userBalance;
+  try {
+    userBalance = await u.getCalculatedBalance();
+  } catch (Error) {
+    logger.log('', [req.id, 'error running getCalculatedBalance():', Error.message]);
+    lock.releaseLock();
+    return errorTryAgainLater(res);
+  }
+
+  lightning.decodePayReq({ pay_req: req.body.invoice }, async function (err, info) {
+    if (err) {
+      await lock.releaseLock();
+      return errorNotAValidInvoice(res);
+    }
+
+    if (+info.num_satoshis === 0) {
+      // 'tip' invoices
+      info.num_satoshis = freeAmount;
+    }
+
+    logger.log('/payinvoice', [req.id, 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
+
+    if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1) {
+      // got enough balance, including 1% of payment amount - reserve for fees
+
+      /*
+      if (identity_pubkey === info.destination) {
+        // this is internal invoice
+        // now, receiver add balance
+        let userid_payee = await u.getUseridByPaymentHash(info.payment_hash);
+        if (!userid_payee) {
+          await lock.releaseLock();
+          return errorGeneralServerError(res);
+        }
+
+        if (await u.getPaymentHashPaid(info.payment_hash)) {
+          // this internal invoice was paid, no sense paying it again
+          await lock.releaseLock();
+          return errorLnd(res);
+        }
+
+        let UserPayee = new User(redis, bitcoinclient, lightning);
+        UserPayee._userid = userid_payee; // hacky, fixme
+        await UserPayee.clearBalanceCache();
+
+        // sender spent his balance:
+        await u.clearBalanceCache();
+        await u.savePaidLndInvoice({
+          timestamp: parseInt(+new Date() / 1000),
+          type: 'paid_invoice',
+          value: +info.num_satoshis + Math.floor(info.num_satoshis * internalFee),
+          fee: Math.floor(info.num_satoshis * internalFee),
+          memo: decodeURIComponent(info.description),
+          pay_req: req.body.invoice,
+        });
+
+        const invoice = new Invo(redis, bitcoinclient, lightning);
+        invoice.setInvoice(req.body.invoice);
+        await invoice.markAsPaidInDatabase();
+
+        // now, faking LND callback about invoice paid:
+        const preimage = await invoice.getPreimage();
+        if (preimage) {
+          subscribeInvoicesCallCallback({
+            state: 'SETTLED',
+            memo: info.description,
+            r_preimage: Buffer.from(preimage, 'hex'),
+            r_hash: Buffer.from(info.payment_hash, 'hex'),
+            amt_paid_sat: +info.num_satoshis,
+          });
+        }
+        await lock.releaseLock();
+        return res.send(info);
+      }
+      */
+      //External payment request
+
+      if (!info.num_satoshis) {
+        // tip invoice, but someone forgot to specify amount
+        await lock.releaseLock();
+        return errorBadArguments(res);
+      }
+      let inv = {
+        payment_request: req.body.invoice,
+        amt: info.num_satoshis, // amt is used only for 'tip' invoices
+        fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
+      };
+      try {
+        let payInformation = {
+          req_id: req.id,
+          payment_request: info,
+          user: u.getUserId(),
+          invoice: req.body.invoice,
+          date: new Date()
+        };
+
+        await redis.set(info.payment_hash, JSON.stringify(payInformation));
+        await u.lockFunds(req.body.invoice, info);
+
+        logger.log('Payment Invoice Date: ' + payInformation.date, [req.id]);
+
+        callPayInvoice.write(inv);
+        
+        lock.releaseLock();
+        //TODO: Remove res.send. Bot send 2 request
+        res.send({
+          "status": "OK",
+          "message": "Transaction in progress...."
+        })
+        
+      } catch (Err) {
+        logger.error('Error procesing payment: ' + JSON.stringify(Err), [req.id]);
+        
+        await redis.del(info.payment_hash);
+        await lock.releaseLock();
+        return errorPaymentFailed(res);
+      }
+    } else {
+      await lock.releaseLock();
+      return errorNotEnougBalance(res);
+    }
+
+  });
+
+});
+
 router.post('/payinvoice', async function (req, res) {
   let u = new User(redis, bitcoinclient, lightning);
   if (!(await u.loadByAuthorization(req.headers.authorization))) {
@@ -693,11 +1017,8 @@ router.post('/payinvoice', async function (req, res) {
         fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
       };
       try {
-        console.log('Payment Invoice: before lock funds...');
         await u.lockFunds(req.body.invoice, info);
-        console.log('Payment Invoice: about lock funds...');
         call.write(inv);
-        console.log('Payment Invoice: After write...');
       } catch (Err) {
         await lock.releaseLock();
         return errorPaymentFailed(res);
