@@ -243,21 +243,25 @@ const callPaymentInvoiceInternal = async function (response) {
     
 
     if(!response.type){
-      //Lightningchat
-      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+      let notification = {
+        error: false,
+        payment_hash: LightningInvoiceSettledNotification.hash,
         user_id: user._userid, 
-        amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
+        total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
         time: Math.trunc(new Date().getTime() / 1000)
-      })); 
-      //end lightningchat
+      };
+      publishPaymentV2(notification);
     } else if(response.type === 'bill_pay'){
-      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+      let notification = {
+        error: false,
+        payment_hash: LightningInvoiceSettledNotification.hash,
         user_id: user._userid, 
-        amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
+        total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
         time: Math.trunc(new Date().getTime() / 1000),
+        type: response.type,
         payer: response.payer,
-        type: response.type 
-      }));
+      };
+      publishPaymentV2(notification);
     }
       
     const baseURI = process.env.GROUNDCONTROL;
@@ -277,6 +281,17 @@ const callPaymentInvoiceInternal = async function (response) {
       ),
     );
     console.log('GroundControl:', apiResponse.originalResponse.status);
+  }else {
+    let notification = {
+      error: true,
+      error_code: PaymentInvoiceError.ALREADY_PAYMENT,
+      error_message: response.message,
+      payment_hash: response.payment_hash,
+      user_id: response.user, 
+      total_amount: response.amt_paid_sat,
+      time: Math.trunc(new Date().getTime() / 1000)
+    };
+    publishPaymentV2(notification);
   }
 };
 
@@ -783,7 +798,7 @@ router.post('/v2/payinvoice', async function (req, res) {
     if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1) {
       // got enough balance, including 1% of payment amount - reserve for fees
 
-      /*
+      
       if (identity_pubkey === info.destination) {
         // this is internal invoice
         // now, receiver add balance
@@ -796,7 +811,19 @@ router.post('/v2/payinvoice', async function (req, res) {
         if (await u.getPaymentHashPaid(info.payment_hash)) {
           // this internal invoice was paid, no sense paying it again
           await lock.releaseLock();
-          return errorLnd(res);
+
+          callPaymentInvoiceInternal({
+            state: 'ERROR',
+            message: 'Invoice already paid',
+            payment_hash: info.payment_hash,
+            user: u.getUserId(),
+            amt_paid_sat: info.num_satoshis,
+          });
+          await lock.releaseLock();
+          return res.send({
+            "status": "OK",
+            "message": "Transaction in progress...."
+          });
         }
 
         let UserPayee = new User(redis, bitcoinclient, lightning);
@@ -821,7 +848,7 @@ router.post('/v2/payinvoice', async function (req, res) {
         // now, faking LND callback about invoice paid:
         const preimage = await invoice.getPreimage();
         if (preimage) {
-          subscribeInvoicesCallCallback({
+          callPaymentInvoiceInternal({
             state: 'SETTLED',
             memo: info.description,
             r_preimage: Buffer.from(preimage, 'hex'),
@@ -830,9 +857,12 @@ router.post('/v2/payinvoice', async function (req, res) {
           });
         }
         await lock.releaseLock();
-        return res.send(info);
+        return res.send({
+          "status": "OK",
+          "message": "Transaction in progress...."
+        })
       }
-      */
+      
       //External payment request
 
       if (!info.num_satoshis) {
@@ -863,7 +893,7 @@ router.post('/v2/payinvoice', async function (req, res) {
         
         lock.releaseLock();
         //TODO: Remove res.send. Bot send 2 request
-        res.send({
+        return res.send({
           "status": "OK",
           "message": "Transaction in progress...."
         })
