@@ -99,14 +99,14 @@ const subscribeInvoicesCallCallback = async function (response) {
 
     if(!response.type){
       //Lightningchat
-      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+      await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify({
         user_id: user._userid, 
         amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
         time: Math.trunc(new Date().getTime() / 1000)
       })); 
       //end lightningchat
     } else if(response.type === 'bill_pay'){
-      await redis.rpush('invoice_paid_for_bot', JSON.stringify({
+      await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify({
         user_id: user._userid, 
         amt_paid_sat:LightningInvoiceSettledNotification.amt_paid_sat, 
         time: Math.trunc(new Date().getTime() / 1000),
