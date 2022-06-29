@@ -48,7 +48,6 @@ function log(label, message) {
  * @param {string} message log message
  */
 function error(label, message) {
-  console.error(new Date(), label, message);
   logger.log({
     level: 'error',
     label: label,
