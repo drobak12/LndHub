@@ -102,7 +102,12 @@ export class User {
   }
 
   async getAddress() {
-    return await this._redis.get('bitcoin_address_for_' + this._userid);
+    // lightningChat before
+    //return await this._redis.get('bitcoin_address_for_' + this._userid);
+    // lightningChat fater
+    const address = await this._redis.get('bitcoin_address_for_' + this._userid);
+    this._redis.set('userid_by_address_' + address, this._userid);
+    return address;
   }
 
   /**
