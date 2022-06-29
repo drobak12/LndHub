@@ -147,8 +147,8 @@ export class User {
     console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
     let userBalance;
     try {
-      //await this.clearBalanceCache();
-      //userBalance = await this.getCalculatedBalance();
+      await this.clearBalanceCache();
+      userBalance = await this.getCalculatedBalance();
     } catch (Error) {
       logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
       lock.releaseLock();
@@ -164,7 +164,7 @@ export class User {
     // Generate Bill
     try{
       let crytpRandomBytes = crypto.randomBytes(20);
-      let token = crytpRandomBytes.toString('hex');
+      let token = crytpRandomBytes.toString('base64');
       let bill = {
           token: token,
           amount: amount,
