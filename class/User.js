@@ -164,7 +164,7 @@ export class User {
     // Generate Bill
     try{
       let crytpRandomBytes = crypto.randomBytes(20);
-      let token = crytpRandomBytes.toString('hex');
+      let token = crytpRandomBytes.toString('base64');
       let bill = {
           token: token,
           amount: amount,

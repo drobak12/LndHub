@@ -408,8 +408,9 @@ router.post('/bill', postLimiter, async function (req, res) {
   try {
     let host = config.callbackHost;
     let bill = await u.createBill(req.id, amount, host);
-    let callbackUrl = host + config.billUrl + "?token=" + bill.token
-    const encoded = lnurl.encode(callbackUrl);
+    let callbackUrl = host + config.billUrl + "?token=" + bill.token;
+    
+    const encoded = bill.token;//lnurl.encode(callbackUrl);    
     
     res.send({bill: bill, bill_request: encoded });
   } catch (Error) {
