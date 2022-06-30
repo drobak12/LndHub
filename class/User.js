@@ -165,10 +165,11 @@ export class User {
     try{
       let crytpRandomBytes = crypto.randomBytes(20);
       let token = crytpRandomBytes.toString('base64');
+      let timestamp = parseInt(+new Date() / 1000)
       let bill = {
           token: token,
           amount: amount,
-          timestamp: parseInt(+new Date() / 1000),
+          timestamp: timestamp,
           created_by: this.getUserId(),
           currency: currency,
           expiration: timestamp + 86400
