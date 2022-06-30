@@ -134,7 +134,7 @@ export class User {
     });
   }
 
-  async createBill(requestId, amount){
+  async createBill(requestId, amount, currency){
 
     // obtaining a lock
     console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
@@ -169,7 +169,9 @@ export class User {
           token: token,
           amount: amount,
           timestamp: parseInt(+new Date() / 1000),
-          created_by: this.getUserId()
+          created_by: this.getUserId(),
+          currency: currency,
+          expiration: timestamp + 86400
       }
   
       this.saveBill(token, bill);
@@ -331,6 +333,7 @@ export class User {
     let data = JSON.stringify(bill);
     console.log('save data:' + data);
     await this._redis.set('bill_' + token, data);
+    await this._redis.expireat('bill_' + token, bill.expiration);
   }
 
   async deleteBill(token) {

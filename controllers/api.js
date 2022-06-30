@@ -404,10 +404,11 @@ router.post('/bill', postLimiter, async function (req, res) {
   if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
 
   let amount = req.body.amount;
+  let currency = req.body.currency;
   
   try {
     let host = config.callbackHost;
-    let bill = await u.createBill(req.id, amount, host);
+    let bill = await u.createBill(req.id, amount, currency);
     let callbackUrl = host + config.billUrl + "?token=" + bill.token;
     
     const encoded = bill.token;//lnurl.encode(callbackUrl);    
