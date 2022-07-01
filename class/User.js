@@ -164,7 +164,9 @@ export class User {
     // Generate Bill
     try{
       let crytpRandomBytes = crypto.randomBytes(20);
-      let token = crytpRandomBytes.toString('base64');
+      let token = crytpRandomBytes.toString('base64').replace(/\+/g, "_");
+
+
       let timestamp = parseInt(+new Date() / 1000)
       let bill = {
           token: token,
