@@ -134,7 +134,7 @@ export class User {
     });
   }
 
-  async createBill(requestId, amount, currency){
+  async createBill(requestId, amount, currency, amountInSats){
 
     // obtaining a lock
     console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
@@ -156,7 +156,7 @@ export class User {
     }
 
     // Check balance
-    if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
+    if (!(userBalance >= +amountInSats + Math.floor(amountInSats * forwardFee) + 1)) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
     }
@@ -174,6 +174,7 @@ export class User {
           timestamp: timestamp,
           created_by: this.getUserId(),
           currency: currency,
+          amountInSats: amountInSats,
           expiration: timestamp + 86400
       }
   
