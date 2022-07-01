@@ -154,7 +154,6 @@ const processPayPaymentCallback = async function (payment){
     }
 
     let paymentHash = payment.payment_hash.toString('hex');
-    console.log();
     logger.log('Processing callback payment invoice', [paymentHash]);
 
     let payInformationString = await redis.get(paymentHash);
@@ -314,7 +313,7 @@ function retrieveErrorCode(payment){
 }
 
 function publishPaymentV2(paymentNotification){
-  redis.rpush('v2_invoice_paid_for_bot', JSON.stringify(paymentNotification));
+  return redis.rpush('v2_invoice_paid_for_bot', JSON.stringify(paymentNotification));
 }
 
 var callPayInvoice = lightning.sendPayment({});
@@ -408,7 +407,7 @@ router.post('/bill', postLimiter, async function (req, res) {
   if (!req.body.currency) 
     currency = "SATS";
   
-  let amountInSats = convertAmountToSatoshis(amount, currency);
+  let amountInSats = await convertAmountToSatoshis(amount, currency);
 
   try {
     let host = config.callbackHost;
@@ -602,8 +601,6 @@ router.get('/bill/process', async function (req, res) {
       info.num_satoshis = freeAmount;
     }
 
-    logger.log('/payinvoice', [req.id, 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
-
     if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1) {
       // got enough balance, including 1% of payment amount - reserve for fees
 
@@ -655,8 +652,7 @@ router.get('/bill/process', async function (req, res) {
           });
         }
         await lock.releaseLock();
-        console.log("Payment successful: " + JSON.stringify(info));
-        
+        logger.log('api.bill.process', [req.id, "Payment successful", JSON.stringify(info)]);        
         u.deleteBill(token);
         return res.send({status:"OK"});
       }
@@ -675,7 +671,7 @@ router.get('/bill/process', async function (req, res) {
           await u.savePaidLndInvoice(payment);
           await u.clearBalanceCache();
           lock.releaseLock();
-          console.log("Payment successful: " + JSON.stringify(payment));
+          logger.log('api.bill.process', [req.id, "Payment successful", JSON.stringify(info)]);        
           
           u.deleteBill(token);
           return res.send({status:"OK"});
@@ -765,7 +761,6 @@ router.post('/sendcoins', postLimiter, async function (req, res) {
         }
   
         let txid = await u.sendCoins(req.id, amount, address, parseInt(info.fee_sat));
-        logger.log('TX Response::' + txid);
         res.send({txid: txid});
       },
     );
