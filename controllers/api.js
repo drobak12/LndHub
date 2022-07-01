@@ -405,6 +405,8 @@ router.post('/bill', postLimiter, async function (req, res) {
 
   let amount = req.body.amount;
   let currency = req.body.currency;
+  if (!req.body.currency) 
+    currency = "SATS";
   
   try {
     let host = config.callbackHost;
@@ -420,6 +422,58 @@ router.post('/bill', postLimiter, async function (req, res) {
   }
 });
 
+
+function convertAmountToSatoshis(amount, currency)
+{
+  if (!currency)
+    return amount;
+  if ("SATS"==currency)
+    return amount;
+  if ("USD"==currency)
+    return 5232.6543 *  amount;
+  if ("EURO"==currency)
+    return 5388.42  *  amount;
+  if ("BRL"==currency)
+    return 981.69  *  amount;
+  if ("ETH"==currency)
+    return 5412896.13  *  amount;
+  if ("JPY"==currency)
+    return  38.10 *  amount;
+  if ("UYU"==currency)
+    return   130.61 *  amount;
+
+  //TODO: check currency exists!
+  return amount;
+};
+
+
+function convertToCurrency(amount, currencyFrom, currencyTo)
+{
+  if (!currencyFrom) currencyFrom = "SATS";
+  if (!currencyTo) currencyTo = "SATS";
+
+  let sats = convertAmountToSatoshis(amount, currencyFrom);
+
+  let convertRatio =  convertAmountToSatoshis(1, currencyTo);
+  return sats / convertRatio; 
+};
+
+router.get('/convertToCurrency', async function (req, res) 
+{
+  logger.log('/convertToCurrency', [req.id]);
+  if (!req.query.amount) return errorBadArguments(res);
+  if (!req.query.from) return errorBadArguments(res);
+  if (!req.query.to) return errorBadArguments(res);
+
+  let amount =  0 +  req.query.amount;
+  amount = convertToCurrency(amount,req.query.from,req.query.to)
+  let response = {
+    "amount": amount,
+    "currency": req.query.to
+  };
+  return res.send(response);
+});
+
 router.get('/bill', async function (req, res) {
   logger.log('/bill (get)', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
@@ -431,10 +485,16 @@ router.get('/bill', async function (req, res) {
   if(!bill){
     return billNotFound(res);
   }
+
+  let currency = bill.currency;
+  if (!currency) 
+    currency = "SATS";
+
+  let amount = convertAmountToSatoshis(bill.amount, currency);
   
   let withDrawRequest = {
-    "minWithdrawable": bill.amount,
-    "maxWithdrawable": bill.amount,
+    "minWithdrawable": amount,
+    "maxWithdrawable": amount,
     "defaultDescription": "lnurl-toolbox: withdrawRequest",
     "callback": config.callbackHost + config.billProcessUrl,
     "k1": token,
@@ -464,7 +524,7 @@ router.get('/bill/process', async function (req, res) {
     return errorBadAuth(res);
   }
   
-  logger.log('/bill/process', [req.id, "Parameters are valid"]);
+  //logger.log('/bill/process', [req.id, "Parameters are valid"]);
   /////////////////////////// TODO: REFACTOR, SAME CODE IN /PAYINVOICE
   
   if (!paymentRequest) return errorBadArguments(res);
