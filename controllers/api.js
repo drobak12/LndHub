@@ -441,6 +441,8 @@ function convertAmountToSatoshis(amount, currency)
     return  38.10 *  amount;
   if ("UYU"==currency)
     return   130.61 *  amount;
+  if ("BTC"==currency)
+    return   100000000 *  amount;
 
   //TODO: check currency exists!
   return amount;
