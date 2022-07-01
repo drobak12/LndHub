@@ -458,12 +458,21 @@ function convertToCurrency(amount, currencyFrom, currencyTo)
   return sats / convertRatio; 
 };
 
-router.get('/convertToCurrency', async function (req, res) {
+router.get('/convertToCurrency', async function (req, res) 
+{
   logger.log('/convertToCurrency', [req.id]);
   if (!req.query.amount) return errorBadArguments(res);
   if (!req.query.from) return errorBadArguments(res);
   if (!req.query.to) return errorBadArguments(res);
 
+  let amount =  0 +  req.query.amount;
+  amount = convertToCurrency(amount,req.query.from,req.query.to)
+  let response = {
+    "amount": amount,
+    "currency": req.query.to
+  };
+  return res.send(response);
+});
 
 router.get('/bill', async function (req, res) {
   logger.log('/bill (get)', [req.id]);
