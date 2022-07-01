@@ -408,9 +408,11 @@ router.post('/bill', postLimiter, async function (req, res) {
   if (!req.body.currency) 
     currency = "SATS";
   
+  let amountInSats = convertAmountToSatoshis(amount, currency);
+   
   try {
     let host = config.callbackHost;
-    let bill = await u.createBill(req.id, amount, currency);
+    let bill = await u.createBill(req.id, amount, currency, amountInSats);
     let callbackUrl = host + config.billUrl + "?token=" + bill.token;
     
     const encoded = bill.token;//lnurl.encode(callbackUrl);    
@@ -423,29 +425,67 @@ router.post('/bill', postLimiter, async function (req, res) {
 });
 
 
-function convertAmountToSatoshis(amount, currency)
+async function updateConvertRatios() 
+{
+  let currencies = ['USD', 'EUR', 'BRL', 'JPY', 'UYU'];
+  for (var i = 0; i < currencies.length; i++) {
+    let currency = currencies[i];
+    console.log('updating currency:' + currency);
+
+    try {
+      let url =
+        'https://free.currconv.com/api/v7/convert?apiKey=40b360058919ec2bc32e&compact=ultra&q=BTC_' +
+        currency;
+      const apiResponse = await new Frisbee().get(url); //{"BTC_USD":19474.1778}
+      let ratio = apiResponse.body['BTC_' + currency];
+
+      console.log('updating currency ratio:' + currency + '=' + ratio);
+
+      let key = 'convert_ratio_BTC_' + currency;
+      await redis.set(key,ratio);
+    } catch (Error) {
+      logger.log('', [
+        'error updating currency ' + currency + ':',
+        Error.message,
+      ]);
+    }
+  }
+  console.log('END');
+}
+
+updateConvertRatios();
+setInterval(updateConvertRatios, 120000);
+
+async function getConvertRatioToSatoshis(currency)
+{
+  if ("SATS"==currency)
+    return 1;
+  if ("BTC"==currency)
+    return 100000000;
+  if ("EURO"==currency)
+    currency = "EUR";
+
+  let key = "convert_ratio_BTC_"+currency;
+  let convertRatio = await redis.get(key)
+
+  if (!convertRatio)
+  {
+    //TODO!!!
+    return 1;
+  }
+  return  100000000.0 / convertRatio;
+
+}
+
+async function convertAmountToSatoshis(amount, currency)
 {
   if (!currency)
     return amount;
   if ("SATS"==currency)
     return amount;
-  if ("USD"==currency)
-    return 5232.6543 *  amount;
-  if ("EURO"==currency)
-    return 5388.42  *  amount;
-  if ("BRL"==currency)
-    return 981.69  *  amount;
-  if ("ETH"==currency)
-    return 5412896.13  *  amount;
-  if ("JPY"==currency)
-    return  38.10 *  amount;
-  if ("UYU"==currency)
-    return   130.61 *  amount;
-  if ("BTC"==currency)
-    return   100000000 *  amount;
 
-  //TODO: check currency exists!
-  return amount;
+  let ratio = getConvertRatioToSatoshis(currency);
+  return ratio * amount;
 };
 
 
