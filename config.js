@@ -21,6 +21,11 @@ let config = {
   lnd: {
     url: '127.0.0.1:10009',
   },
+  currencyConvert:{
+    url: 'https://free.currconv.com/api/v7/convert?apiKey=40b360058919ec2bc32e&compact=ultra&q=BTC_',
+    updateIntervalMillis :1200000,
+    currencies: ['USD', 'EUR', 'BRL', 'JPY', 'UYU']
+  }
 };
 
 if (process.env.CONFIG) {

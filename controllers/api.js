@@ -409,7 +409,7 @@ router.post('/bill', postLimiter, async function (req, res) {
     currency = "SATS";
   
   let amountInSats = convertAmountToSatoshis(amount, currency);
-   
+
   try {
     let host = config.callbackHost;
     let bill = await u.createBill(req.id, amount, currency, amountInSats);
@@ -427,15 +427,13 @@ router.post('/bill', postLimiter, async function (req, res) {
 
 async function updateConvertRatios() 
 {
-  let currencies = ['USD', 'EUR', 'BRL', 'JPY', 'UYU'];
+  let currencies = config.currencyConvert.currencies;
   for (var i = 0; i < currencies.length; i++) {
     let currency = currencies[i];
     console.log('updating currency:' + currency);
 
     try {
-      let url =
-        'https://free.currconv.com/api/v7/convert?apiKey=40b360058919ec2bc32e&compact=ultra&q=BTC_' +
-        currency;
+      let url =config.currencyConvert.url+ currency;
       const apiResponse = await new Frisbee().get(url); //{"BTC_USD":19474.1778}
       let ratio = apiResponse.body['BTC_' + currency];
 
@@ -444,7 +442,7 @@ async function updateConvertRatios()
       let key = 'convert_ratio_BTC_' + currency;
       await redis.set(key,ratio);
     } catch (Error) {
-      logger.log('', [
+      logger.log('api.updateConvertRatios', [
         'error updating currency ' + currency + ':',
         Error.message,
       ]);
@@ -454,7 +452,7 @@ async function updateConvertRatios()
 }
 
 updateConvertRatios();
-setInterval(updateConvertRatios, 120000);
+setInterval(updateConvertRatios, config.currencyConvert.updateIntervalMillis);
 
 async function getConvertRatioToSatoshis(currency)
 {
@@ -467,9 +465,11 @@ async function getConvertRatioToSatoshis(currency)
 
   let key = "convert_ratio_BTC_"+currency;
   let convertRatio = await redis.get(key)
+  logger.log('api.getConvertRatioToSatoshis', ['key:' + key,'convertRatio: ' + convertRatio]);
 
   if (!convertRatio)
   {
+    logger.error('Error in getConvertRatioToSatoshis', [currency]);
     //TODO!!!
     return 1;
   }
@@ -484,19 +484,19 @@ async function convertAmountToSatoshis(amount, currency)
   if ("SATS"==currency)
     return amount;
 
-  let ratio = getConvertRatioToSatoshis(currency);
+  let ratio = await getConvertRatioToSatoshis(currency);
   return ratio * amount;
 };
 
 
-function convertToCurrency(amount, currencyFrom, currencyTo)
+async function convertToCurrency(amount, currencyFrom, currencyTo)
 {
   if (!currencyFrom) currencyFrom = "SATS";
   if (!currencyTo) currencyTo = "SATS";
 
-  let sats = convertAmountToSatoshis(amount, currencyFrom);
+  let sats = await convertAmountToSatoshis(amount, currencyFrom);
 
-  let convertRatio =  convertAmountToSatoshis(1, currencyTo);
+  let convertRatio =  await convertAmountToSatoshis(1, currencyTo);
   return sats / convertRatio; 
 };
 
@@ -508,7 +508,7 @@ router.get('/convertToCurrency', async function (req, res)
   if (!req.query.to) return errorBadArguments(res);
 
   let amount =  0 +  req.query.amount;
-  amount = convertToCurrency(amount,req.query.from,req.query.to)
+  amount = await convertToCurrency(amount,req.query.from,req.query.to)
   let response = {
     "amount": amount,
     "currency": req.query.to
@@ -532,7 +532,7 @@ router.get('/bill', async function (req, res) {
   if (!currency) 
     currency = "SATS";
 
-  let amount = convertAmountToSatoshis(bill.amount, currency);
+  let amount = await convertAmountToSatoshis(bill.amount, currency);
   
   let withDrawRequest = {
     "minWithdrawable": amount,
