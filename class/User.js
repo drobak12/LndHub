@@ -1,4 +1,5 @@
 import { Lock } from './Lock';
+let logger = require('../utils/logger');
 
 var crypto = require('crypto');
 var lightningPayReq = require('bolt11');
@@ -135,25 +136,23 @@ export class User {
   }
 
   async createBill(requestId, amount, currency, amountInSats){
+    logger.log('User.createBill', ['Start', requestId, this.getUserId(), amount, currency, amountInSats]);
 
-    // obtaining a lock
-    console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
     let lock = new Lock(this._redis, 'creating_bill_for' + this.getUserId());
     if (!(await lock.obtainLock())) {
       return errorLockUser(res);
     }
 
-    // Getting balance
-    console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
     let userBalance;
     try {
       await this.clearBalanceCache();
       userBalance = await this.getCalculatedBalance();
     } catch (Error) {
-      logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
+      logger.log('User.createBill', [requestId, 'error running getCalculatedBalance():', Error.message]);
       lock.releaseLock();
       return errorTryAgainLater(res);
     }
+    logger.log('User.createBill', [requestId, 'Balance: '+userBalance]);
 
     // Check balance
     if (!(userBalance >= +amountInSats + Math.floor(amountInSats * forwardFee) + 1)) {
@@ -165,7 +164,6 @@ export class User {
     try{
       let crytpRandomBytes = crypto.randomBytes(20);
       let token = crytpRandomBytes.toString('base64').replace(/\+/g, "_");
-
 
       let timestamp = parseInt(+new Date() / 1000)
       let bill = {
