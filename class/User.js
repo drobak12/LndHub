@@ -224,7 +224,7 @@ export class User {
           return reject('LND failure when trying to send coins::' + err);
         }
         
-        logger.log('User.sendCoins', [requestId, this.getUserId(), 'txid: ' + response.txid]);
+        logger.log('User.sendCoins', [requestId, user.getUserId(), 'txid: ' + response.txid]);
         lock.releaseLock();        
         await user.saveSendCoinsTx({
           timestamp: parseInt(+new Date() / 1000),
