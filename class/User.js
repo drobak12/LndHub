@@ -136,7 +136,7 @@ export class User {
   }
 
   async createBill(requestId, amount, currency, amountInSats){
-    logger.log('User.createBill', ['Start', requestId, this.getUserId(), amount, currency, amountInSats]);
+    logger.log('User.createBill', [requestId, this.getUserId(), amount, currency, amountInSats]);
 
     let lock = new Lock(this._redis, 'creating_bill_for' + this.getUserId());
     if (!(await lock.obtainLock())) {
@@ -181,7 +181,7 @@ export class User {
       lock.releaseLock();
       return bill;
     } catch (Error) {
-      logger.log('', [requestId, 'error saving bill:', Error.message]);
+      logger.log('User.createBill', [requestId, 'error saving bill:', Error.message]);
       lock.releaseLock();
       return errorTryAgainLater(res);
     }
@@ -191,33 +191,29 @@ export class User {
 
   async sendCoins(requestId, amount, address, amountfee) {
 
-    // obtaining a lock
-    console.log('Obtaning lock... ' + requestId + ' userid: '+ this.getUserId())
     let lock = new Lock(this._redis, 'generating_address_' + this.getUserId());
     if (!(await lock.obtainLock())) {
       return errorLockUser(res);
     }
 
     // Getting balance
-    console.log('Getting balance... ' + requestId + ' userid: '+ this.getUserId())
     let userBalance;
     try {
       await this.clearBalanceCache();
       userBalance = await this.getCalculatedBalance();
     } catch (Error) {
-      logger.log('', [requestId, 'error running getCalculatedBalance():', Error.message]);
+      logger.log('User.sendCoins', [requestId, 'error running getCalculatedBalance():', Error.message]);
       lock.releaseLock();
       return errorTryAgainLater(res);
     }
 
     // Check balance
-    console.log('Checking balance with transaction amount' + requestId + ' userid: '+ this.getUserId())
     if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
       await lock.releaseLock();
       return errorNotEnougBalance(res);
     }
 
-    console.log('Executing sendcoins... ' + requestId + ' userid: '+ this.getUserId() + ' address: ' + address + ' amount: ' + amount)
+    logger.log('User.sendCoins', [requestId, this.getUserId(), 'address: ' + address, 'amount: ' + amount]);
     let user= this;
     
     return new Promise(function (resolve, reject) {
@@ -228,7 +224,7 @@ export class User {
           return reject('LND failure when trying to send coins::' + err);
         }
         
-        console.log('response.txid::' + response.txid)
+        logger.log('User.sendCoins', [requestId, this.getUserId(), 'txid: ' + response.txid]);
         lock.releaseLock();        
         await user.saveSendCoinsTx({
           timestamp: parseInt(+new Date() / 1000),
@@ -333,20 +329,16 @@ export class User {
 
   async saveBill(token, bill) {
     let data = JSON.stringify(bill);
-    console.log('save data:' + data);
     await this._redis.set('bill_' + token, data);
     await this._redis.expireat('bill_' + token, bill.expiration);
   }
 
   async deleteBill(token) {
-    console.log('removing token:' + token);
     await this._redis.del('bill_' + token);
   }
 
   async getBill(token) {
-    console.log('Token:' + token);
     let data = await this._redis.get('bill_' + token);
-    console.log('get data:' + data);
     return JSON.parse(data) 
   }
 
