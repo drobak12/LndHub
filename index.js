@@ -44,7 +44,8 @@ app.use(function (req, res, next) {
 
 app.use(
   morgan(
-    ':id :remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"',
+    //':id :remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"',
+    'info - ":method :url" - [":id", :remote-addr, :remote-user, :status, ":referrer", ":user-agent"]',
   ),
 );
 
