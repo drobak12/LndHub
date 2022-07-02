@@ -1002,7 +1002,7 @@ router.post('/v2/payinvoice', async function (req, res)
             info.num_satoshis = freeAmount;
         }
 
-        logger.log('/payinvoice', [req.id, 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
+        logger.log('/payinvoice', [req.id, u.getUserId(), 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
 
         if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1)
         {
