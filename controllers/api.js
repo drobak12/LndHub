@@ -94,7 +94,7 @@ const subscribeInvoicesCallCallback = async function (response) {
     const user = new User(redis, bitcoinclient, lightning);
     user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
     await user.clearBalanceCache();
-    console.log('payment', LightningInvoiceSettledNotification.hash, 'was paid, posting to GroundControl...');
+    logger.log('api.subscribeInvoicesCallCallback', [user._userid, LightningInvoiceSettledNotification.hash]);
     
 
     if(!response.type){
@@ -238,7 +238,7 @@ const callPaymentInvoiceInternal = async function (response) {
     const user = new User(redis, bitcoinclient, lightning);
     user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
     await user.clearBalanceCache();
-    console.log('payment', LightningInvoiceSettledNotification.hash, 'was paid, posting to GroundControl...');
+    logger.log('api.callPaymentInvoiceInternal', [user._userid, LightningInvoiceSettledNotification.hash]);
     
 
     if(!response.type){

@@ -14,7 +14,9 @@ import { createLogger, format, transports } from 'winston';
 + + + + + + + + + + + + + + + + + + + + + */
 const { combine, timestamp, printf } = format;
 const logFormat = printf((info) => {
-  return `${info.timestamp} : ${info.level}: [${info.label}] : ${info.message}`;
+  //return `${info.timestamp} : ${info.level}: [${info.label}] : ${info.message}`;
+  return `${info.level} - ${info.label} - ${info.message}`;
+
 });
 const logger = createLogger({
   level: 'info',
