@@ -105,14 +105,21 @@ const subscribeInvoicesCallCallback = async function (response) {
         time: Math.trunc(new Date().getTime() / 1000)
       })); 
       //end lightningchat
-    } else if(response.type === 'bill_pay'){
-      await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify({
+    } 
+    else if(response.type === 'bill_pay')
+    {
+      let message = 
+      {
         user_id: user._userid, 
         total_amount:LightningInvoiceSettledNotification.amt_paid_sat, 
         time: Math.trunc(new Date().getTime() / 1000),
         payer: response.payer,
-        type: response.type 
-      }));
+        type: response.type,
+        bill_amount: response.bill.amount,
+        bill_currency:response.bill.currency
+      };
+
+      await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify(message));
     }
       
     const baseURI = process.env.GROUNDCONTROL;
@@ -501,7 +508,6 @@ async function convertToCurrency(amount, currencyFrom, currencyTo)
 
 router.get('/convertToCurrency', async function (req, res) 
 {
-  logger.log('/convertToCurrency', [req.id]);
   if (!req.query.amount) return errorBadArguments(res);
   if (!req.query.from) return errorBadArguments(res);
   if (!req.query.to) return errorBadArguments(res);
@@ -516,7 +522,6 @@ router.get('/convertToCurrency', async function (req, res)
 });
 
 router.get('/bill', async function (req, res) {
-  logger.log('/bill (get)', [req.id]);
   let u = new User(redis, bitcoinclient, lightning);
   
   if (!req.query.token) return errorBadArguments(res);
@@ -532,6 +537,7 @@ router.get('/bill', async function (req, res) {
     currency = "SATS";
 
   let amount = await convertAmountToSatoshis(bill.amount, currency);
+  amount = Math.round (amount);
   
   let withDrawRequest = {
     "minWithdrawable": amount,
@@ -539,7 +545,9 @@ router.get('/bill', async function (req, res) {
     "defaultDescription": "lnurl-toolbox: withdrawRequest",
     "callback": config.callbackHost + config.billProcessUrl,
     "k1": token,
-    "tag": "withdrawRequest"
+    "tag": "withdrawRequest",
+    "bill_amount":bill.amount,
+    "bill_currency":currency
   };
 
   return res.send(withDrawRequest);
@@ -648,7 +656,8 @@ router.get('/bill/process', async function (req, res) {
             r_hash: Buffer.from(info.payment_hash, 'hex'),
             amt_paid_sat: +info.num_satoshis,
             type: 'bill_pay',
-            payer: u.getUserId()
+            payer: u.getUserId(),
+            bill:bill
           });
         }
         await lock.releaseLock();
