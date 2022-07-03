@@ -598,6 +598,7 @@ export class User
                 if (invoice.payment_route)
                 {
                     invoice.fee = +invoice.payment_route.total_fees;
+                    /*  this was adding twice the fee, as total_amt already has the fee in it 
                     invoice.value = +invoice.payment_route.total_fees + +invoice.payment_route.total_amt;
                     if (invoice.payment_route.total_amt_msat && invoice.payment_route.total_amt_msat / 1000 !== +invoice.payment_route.total_amt)
                     {
@@ -607,6 +608,11 @@ export class User
                             Math.max(parseInt(invoice.payment_route.total_amt_msat / 1000), +invoice.payment_route.total_amt) +
                             1; // extra sat to cover for msats, as external layer (clients) dont have that resolution
                     }
+
+                    replaced by the following line:
+                    */
+                    invoice.value = +invoice.payment_route.total_amt;
+
                 } else
                 {
                     invoice.fee = 0;
