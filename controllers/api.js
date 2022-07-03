@@ -173,14 +173,14 @@ subscribeInvoicesCall.on('end', function ()
 
 const processPayPaymentCallback = async function (payment)
 {
+
+    if (!payment)
+    {
+        console.error('Payment is not defined...');
+        return;
+    }
     try
     {
-
-        if (!payment)
-        {
-            console.error('Payment is not defined...');
-            return;
-        }
 
         let paymentHash = payment.payment_hash.toString('hex');
 
@@ -246,7 +246,7 @@ const processPayPaymentCallback = async function (payment)
     }
     catch (Error)
     {
-        logger.error('General error with callback payment invoice V2... Error: ' + JSON.stringify(Error), [paymentHash]);
+        logger.error('General error with callback payment invoice V2 ', [JSON.stringify(Error),JSON.stringify(payment)]);
     }
 
 }
@@ -1028,7 +1028,7 @@ router.post('/v2/payinvoice', async function (req, res)
             info.num_satoshis = freeAmount;
         }
 
-        logger.log('/payinvoice', [req.id, u.getUserId(), 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
+        logger.log('/v2/payinvoice', [req.id, u.getUserId(), 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
 
         if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1)
         {
@@ -1160,7 +1160,7 @@ router.post('/v2/payinvoice', async function (req, res)
     });
 
 });
-
+/*
 router.post('/payinvoice', async function (req, res)
 {
     let u = new User(redis, bitcoinclient, lightning);
@@ -1333,6 +1333,7 @@ router.post('/payinvoice', async function (req, res)
     console.log('Payment Invoice: Finish method...');
 
 });
+*/
 
 router.get('/getbtc', async function (req, res)
 {

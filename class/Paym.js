@@ -87,7 +87,7 @@ export class Paym
 
             // adding internal fee
             let original_invoice_amount_msat = Math.ceil(+payment.payment_route.total_amt_msat - payment.payment_route.total_fees);
-            let fee_to_add_msat = Math.ceil(+payment_route.total_fees_msat + original_invoice_amount_msat * internalFee);
+            let fee_to_add_msat = Math.ceil(+payment.payment_route.total_fees_msat + original_invoice_amount_msat * internalFee);
             payment.payment_route.total_amt_msat = original_invoice_amount_msat + fee_to_add_msat;
             payment.payment_route.total_fees_msat = fee_to_add_msat;
             payment.payment_route.total_fees = Math.ceil( payment.payment_route.total_fees_msat / 1000);
