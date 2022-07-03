@@ -217,7 +217,7 @@ const processPayPaymentCallback = async function (payment)
                 type:"user_paid_invoice",
                 payment_hash: paymentHash,
                 user_id: u.getUserId(),
-                total_amount: payment.payment_route.total_amt,
+                total_amount: +payment.payment_route.total_amt,
                 total_fees: payment.payment_route.total_fees,
                 time: Math.trunc(new Date().getTime() / 1000)
             };
