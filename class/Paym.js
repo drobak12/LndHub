@@ -86,15 +86,21 @@ export class Paym
             console.log("paym.processSendPaymentResponse. Option 1");
 
             // adding internal fee
-            let original_invoice_amount_msat = Math.ceil(+payment.payment_route.total_amt_msat - payment.payment_route.total_fees);
+
+            //console.log("paym.processSendPaymentResponse. total_amt_msat: "  + payment.payment_route.total_amt_msat );
+            //console.log("paym.processSendPaymentResponse. total_fees_msat: "  + payment.payment_route.total_fees_msat );
+
+            let original_invoice_amount_msat = Math.ceil(+payment.payment_route.total_amt_msat - payment.payment_route.total_fees_msat);
             let fee_to_add_msat = Math.ceil(+payment.payment_route.total_fees_msat + original_invoice_amount_msat * internalFee);
             payment.payment_route.total_amt_msat = original_invoice_amount_msat + fee_to_add_msat;
             payment.payment_route.total_fees_msat = fee_to_add_msat;
             payment.payment_route.total_fees = Math.ceil( payment.payment_route.total_fees_msat / 1000);
             payment.payment_route.total_amt = Math.ceil( payment.payment_route.total_amt_msat / 1000);
 
-            console.log("paym.processSendPaymentResponse. total_amt"  + payment.payment_route.total_amt );
-            console.log("paym.processSendPaymentResponse. total_fees" + payment.payment_route.total_fees);
+            //console.log("paym.processSendPaymentResponse. original_invoice_amount_msat: "  + original_invoice_amount_msat );
+            //console.log("paym.processSendPaymentResponse. fee_to_add_msat: "  + fee_to_add_msat );
+            //console.log("paym.processSendPaymentResponse. total_amt: "  + payment.payment_route.total_amt );
+            //console.log("paym.processSendPaymentResponse. total_fees: " + payment.payment_route.total_fees);
             
             if (this._bolt11) payment.pay_req = this._bolt11;
             if (this._decoded) payment.decoded = this._decoded;
