@@ -188,7 +188,9 @@ const processPayPaymentCallback = async function (payment)
         let payInformation = JSON.parse(payInformationString);
         let seconds = Math.round((new Date() - new Date(payInformation.date)) / 1000);
 
-        logger.log('api.processPayPaymentCallback', [paymentHash, 'Seconds:' + seconds, payInformationString]);
+        logger.log('api.processPayPaymentCallback', [paymentHash, 'Seconds:', seconds]);
+        logger.log('api.processPayPaymentCallback', [paymentHash, 'Saved pay information:'  , payInformationString]);
+        logger.log('api.processPayPaymentCallback', [paymentHash, 'Received pay information', JSON.stringify(payment)]);
 
         let u = new User(redis, bitcoinclient, lightning);
         if (!(await u.loadByAuthorization(payInformation.user)))
@@ -211,13 +213,16 @@ const processPayPaymentCallback = async function (payment)
 
             let notification = {
                 error: false,
+                internal_invoice:false,
+                type:"user_paid_invoice",
                 payment_hash: paymentHash,
                 user_id: u.getUserId(),
                 total_amount: payment.payment_route.total_amt,
-                fee: payment.payment_route.total_fees,
+                total_fees: payment.payment_route.total_fees,
                 time: Math.trunc(new Date().getTime() / 1000)
             };
             publishPaymentV2(notification);
+            logger.log('api.processPayPaymentCallback', [paymentHash, 'notification', JSON.stringify(notification)]);
             logger.log('api.processPayPaymentCallback', [paymentHash, 'Payment successful']);
         }
         else
@@ -233,6 +238,7 @@ const processPayPaymentCallback = async function (payment)
                 time: Math.trunc(new Date().getTime() / 1000)
             };
             publishPaymentV2(notification);
+            logger.log('api.processPayPaymentCallback', [paymentHash, 'notification', JSON.stringify(notification)]);
             logger.error('api.processPayPaymentCallback', [paymentHash, 'Payment Failed: ' + payment.payment_error]);
         }
 
@@ -284,6 +290,22 @@ const callPaymentInvoiceInternal = async function (response)
                 time: Math.trunc(new Date().getTime() / 1000)
             };
             publishPaymentV2(notification);
+            logger.log('api.callPaymentInvoiceInternal', [LightningInvoiceSettledNotification.hash, 'notification', JSON.stringify(notification)]);
+
+            notification = {
+                error: false,
+                internal_invoice:true,
+                type:"user_paid_invoice",
+                payment_hash: LightningInvoiceSettledNotification.hash,
+                user_id: response.user,
+                total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
+                total_fees: response.fee,
+                time: Math.trunc(new Date().getTime() / 1000)
+            };
+            publishPaymentV2(notification);
+            logger.log('api.callPaymentInvoiceInternal', [LightningInvoiceSettledNotification.hash, 'notification', JSON.stringify(notification)]);
+
+
         } else if (response.type === 'bill_pay')
         {
             let notification = {
@@ -350,6 +372,9 @@ function retrieveErrorCode(payment)
     } else if (payment.payment_error && payment.payment_error.indexOf('timeout') !== -1)
     {
         return PaymentInvoiceError.TIMEOUT;
+    } else if (payment.payment_error && payment.payment_error.indexOf('no_route') !== -1)
+    {
+        return PaymentInvoiceError.NO_ROUTE;
     } else if (payment.payment_error && payment.payment_error.indexOf('payment is in transition') !== -1)
     {
         return PaymentInvoiceError.PAYMENT_IS_IN_TRANSACTION;
@@ -374,6 +399,7 @@ const PaymentInvoiceError = {
     INCORRECT_PAYMENT_DETAILS: 5,
     PAYMENT_IS_IN_TRANSACTION: 6,
     TIMEOUT: 7,
+    NO_ROUTE: 8,
     UNKOWN: -1
 }
 
@@ -1043,13 +1069,14 @@ router.post('/v2/payinvoice', async function (req, res)
                 UserPayee._userid = userid_payee; // hacky, fixme
                 await UserPayee.clearBalanceCache();
 
+                let fees_to_pay = Math.floor(info.num_satoshis * internalFee);
                 // sender spent his balance:
                 await u.clearBalanceCache();
                 await u.savePaidLndInvoice({
                     timestamp: parseInt(+new Date() / 1000),
                     type: 'paid_invoice',
-                    value: +info.num_satoshis + Math.floor(info.num_satoshis * internalFee),
-                    fee: Math.floor(info.num_satoshis * internalFee),
+                    value: +info.num_satoshis + fees_to_pay,
+                    fee: fees_to_pay,
                     memo: decodeURIComponent(info.description),
                     pay_req: req.body.invoice,
                 });
@@ -1068,6 +1095,8 @@ router.post('/v2/payinvoice', async function (req, res)
                         r_preimage: Buffer.from(preimage, 'hex'),
                         r_hash: Buffer.from(info.payment_hash, 'hex'),
                         amt_paid_sat: +info.num_satoshis,
+                        fee: fees_to_pay,
+                        user: u.getUserId()
                     });
                 }
                 await lock.releaseLock();
