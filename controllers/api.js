@@ -1416,7 +1416,7 @@ router.get('/balance', postLimiter, async function (req, res)
         await u.accountForPosibleTxids();
         let balance = await u.getBalance();
         if (balance < 0) balance = 0;
-        res.send({ BTC: { AvailableBalance: balance } });
+        res.send({ BTC: { AvailableBalance: balance }, USDC: { AvailableBalance:0 } });
     } catch (Error)
     {
         logger.log('', [req.id, 'error getting balance:', Error, 'userid:', u.getUserId()]);
