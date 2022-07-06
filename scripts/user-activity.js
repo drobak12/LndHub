@@ -1,3 +1,7 @@
+//Structure: node_modules/.bin/babel-node <file> <destination-folder>
+//Execute with: node_modules/.bin/babel-node scripts/user-activity.js /tmp
+
+
 const fs = require('fs');
 
 import { User } from '../class';
