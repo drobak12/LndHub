@@ -84,94 +84,100 @@ redis.info(function (err, info)
 
 // ######################## PAY INVOICE - CALLBACK  ########################
 
-const subscribeInvoicesCallCallback = async function (response)
+const InvoicesStreamCallback = async function (response)
 {
-    if (response.state === 'SETTLED')
+    logger.log('api.InvoicesStreamCallback', [JSON.stringify(response)]);
+    if (response.state !== 'SETTLED')
+        return;
+
+    const LightningInvoiceSettledNotification = {
+        memo: response.memo,
+        preimage: response.r_preimage.toString('hex'),
+        hash: response.r_hash.toString('hex'),
+        amt_paid_sat: response.amt_paid_msat ? Math.floor(response.amt_paid_msat / 1000) : response.amt_paid_sat,
+    };
+    // obtaining a lock, to make sure we push to groundcontrol only once
+    // since this web server can have several instances running, and each will get the same callback from LND
+    // and dont release the lock - it will autoexpire in a while
+    let lock = new Lock(redis, 'groundcontrol_hash_' + LightningInvoiceSettledNotification.hash);
+    if (!(await lock.obtainLock()))
     {
-        const LightningInvoiceSettledNotification = {
-            memo: response.memo,
-            preimage: response.r_preimage.toString('hex'),
-            hash: response.r_hash.toString('hex'),
-            amt_paid_sat: response.amt_paid_msat ? Math.floor(response.amt_paid_msat / 1000) : response.amt_paid_sat,
-        };
-        // obtaining a lock, to make sure we push to groundcontrol only once
-        // since this web server can have several instances running, and each will get the same callback from LND
-        // and dont release the lock - it will autoexpire in a while
-        let lock = new Lock(redis, 'groundcontrol_hash_' + LightningInvoiceSettledNotification.hash);
-        if (!(await lock.obtainLock()))
-        {
-            return;
-        }
-        let invoice = new Invo(redis, bitcoinclient, lightning);
-        await invoice._setIsPaymentHashPaidInDatabase(
-            LightningInvoiceSettledNotification.hash,
-            LightningInvoiceSettledNotification.amt_paid_sat || 1,
-        );
-        const user = new User(redis, bitcoinclient, lightning);
-        user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
-        await user.clearBalanceCache();
-        logger.log('api.subscribeInvoicesCallCallback', [user._userid, LightningInvoiceSettledNotification.hash]);
-
-
-        if (!response.type)
-        {
-            //Lightningchat
-            await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify({
-                user_id: user._userid,
-                total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
-                time: Math.trunc(new Date().getTime() / 1000)
-            }));
-            //end lightningchat
-        }
-        else if (response.type === 'bill_pay')
-        {
-            let message =
-            {
-                user_id: user._userid,
-                total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
-                time: Math.trunc(new Date().getTime() / 1000),
-                payer: response.payer,
-                type: response.type,
-                bill_amount: response.bill.amount,
-                bill_currency: response.bill.currency
-            };
-
-            await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify(message));
-        }
-
-        const baseURI = process.env.GROUNDCONTROL;
-        if (!baseURI) return;
-        const _api = new Frisbee({ baseURI: baseURI });
-        const apiResponse = await _api.post(
-            '/lightningInvoiceGotSettled',
-            Object.assign(
-                {},
-                {
-                    headers: {
-                        'Access-Control-Allow-Origin': '*',
-                        'Content-Type': 'application/json',
-                    },
-                    body: LightningInvoiceSettledNotification,
-                },
-            ),
-        );
-        console.log('GroundControl:', apiResponse.originalResponse.status);
+        return;
     }
+    let invoice = new Invo(redis, bitcoinclient, lightning);
+    await invoice._setIsPaymentHashPaidInDatabase(
+        LightningInvoiceSettledNotification.hash,
+        LightningInvoiceSettledNotification.amt_paid_sat || 1,
+    );
+    const user = new User(redis, bitcoinclient, lightning);
+    user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
+    await user.clearBalanceCache();
+    logger.log('api.InvoicesStreamCallback', [user._userid, LightningInvoiceSettledNotification.hash]);
+
+
+    if (!response.type)
+    {
+        //Lightningchat
+        await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify({
+            user_id: user._userid,
+            total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
+            time: Math.trunc(new Date().getTime() / 1000)
+        }));
+        //end lightningchat
+    }
+    else if (response.type === 'bill_pay')
+    {
+        let message =
+        {
+            user_id: user._userid,
+            total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
+            time: Math.trunc(new Date().getTime() / 1000),
+            payer: response.payer,
+            type: response.type,
+            bill_amount: response.bill.amount,
+            bill_currency: response.bill.currency
+        };
+
+        await redis.rpush('v2_invoice_paid_for_bot', JSON.stringify(message));
+    }
+
+    const baseURI = process.env.GROUNDCONTROL;
+    if (!baseURI) return;
+    const _api = new Frisbee({ baseURI: baseURI });
+    const apiResponse = await _api.post(
+        '/lightningInvoiceGotSettled',
+        Object.assign(
+            {},
+            {
+                headers: {
+                    'Access-Control-Allow-Origin': '*',
+                    'Content-Type': 'application/json',
+                },
+                body: LightningInvoiceSettledNotification,
+            },
+        ),
+    );
+    console.log('GroundControl:', apiResponse.originalResponse.status);
 };
-let subscribeInvoicesCall = lightning.subscribeInvoices({});
-subscribeInvoicesCall.on('data', subscribeInvoicesCallCallback);
-subscribeInvoicesCall.on('status', function (status)
+
+
+// ###### Subscribe to invoices stream ########
+var invoicesStream;
+async function invoicesStreamInit()
 {
-    // The current status of the stream.
-});
-subscribeInvoicesCall.on('end', function ()
-{
-    // The server has closed the stream.
-});
+    logger.log('api.invoicesStreamInit', ["Opening stream"]);
+
+    let invoicesStream2=lightning.subscribeInvoices({});
+    invoicesStream2.on('data', InvoicesStreamCallback);
+    invoicesStream2.on('end', invoicesStreamInit);    
+    invoicesStream=invoicesStream2;
+};
+invoicesStreamInit();
+
 
 // ######################## PAY INVOICE - SEND PAYMENT  ########################
 
-const processPayPaymentCallback = async function (payment)
+const processPaymentCallback = async function (payment)
 {
 
     if (!payment)
@@ -188,9 +194,9 @@ const processPayPaymentCallback = async function (payment)
         let payInformation = JSON.parse(payInformationString);
         let seconds = Math.round((new Date() - new Date(payInformation.date)) / 1000);
 
-        logger.log('api.processPayPaymentCallback', [paymentHash, 'Seconds:', seconds]);
-        logger.log('api.processPayPaymentCallback', [paymentHash, 'Saved pay information:'  , payInformationString]);
-        logger.log('api.processPayPaymentCallback', [paymentHash, 'Received pay information', JSON.stringify(payment)]);
+        logger.log('api.processPaymentCallback', [paymentHash, 'Seconds:', seconds]);
+        logger.log('api.processPaymentCallback', [paymentHash, 'Saved pay information:'  , payInformationString]);
+        logger.log('api.processPaymentCallback', [paymentHash, 'Received pay information', JSON.stringify(payment)]);
 
         let u = new User(redis, bitcoinclient, lightning);
         if (!(await u.loadByAuthorization(payInformation.user)))
@@ -222,8 +228,8 @@ const processPayPaymentCallback = async function (payment)
                 time: Math.trunc(new Date().getTime() / 1000)
             };
             publishPaymentV2(notification);
-            logger.log('api.processPayPaymentCallback', [paymentHash, 'notification', JSON.stringify(notification)]);
-            logger.log('api.processPayPaymentCallback', [paymentHash, 'Payment successful']);
+            logger.log('api.processPaymentCallback', [paymentHash, 'notification', JSON.stringify(notification)]);
+            logger.log('api.processPaymentCallback', [paymentHash, 'Payment successful']);
         }
         else
         {
@@ -238,8 +244,8 @@ const processPayPaymentCallback = async function (payment)
                 time: Math.trunc(new Date().getTime() / 1000)
             };
             publishPaymentV2(notification);
-            logger.log('api.processPayPaymentCallback', [paymentHash, 'notification', JSON.stringify(notification)]);
-            logger.error('api.processPayPaymentCallback', [paymentHash, 'Payment Failed: ' + payment.payment_error]);
+            logger.log('api.processPaymentCallback', [paymentHash, 'notification', JSON.stringify(notification)]);
+            logger.error('api.processPaymentCallback', [paymentHash, 'Payment Failed: ' + payment.payment_error]);
         }
 
 
@@ -388,8 +394,18 @@ function publishPaymentV2(paymentNotification)
     return redis.rpush('v2_invoice_paid_for_bot', JSON.stringify(paymentNotification));
 }
 
-var callPayInvoice = lightning.sendPayment({});
-callPayInvoice.on('data', processPayPaymentCallback);
+
+// ###### Subscribe to payments stream ########
+var paymentStream;
+async function paymentStreamInit()
+{
+    logger.log('api.paymentStreamInit', ["Opening stream"]);
+    paymentStream = lightning.sendPayment({});
+    paymentStream.on('data', processPaymentCallback);
+    paymentStream.on('end', paymentStreamInit);    
+};
+paymentStreamInit();
+
 
 const PaymentInvoiceError = {
     ALREADY_PAYMENT: 1,
@@ -529,6 +545,14 @@ async function updateConvertRatios()
 
             let key = 'convert_ratio_BTC_' + currency;
             await redis.set(key, ratio);
+
+            if (currency==="USD")
+            {
+                currency = "USDC"
+                let key = 'convert_ratio_BTC_' + currency;
+                await redis.set(key, ratio);
+            }
+
         } catch (Error)
         {
             logger.log('api.updateConvertRatios', [
@@ -537,7 +561,7 @@ async function updateConvertRatios()
             ]);
         }
     }
-    console.log('END');
+    console.log('updateConvertRatios: END');
 }
 
 updateConvertRatios();
@@ -749,7 +773,7 @@ router.get('/bill/process', async function (req, res)
                 const preimage = await invoice.getPreimage();
                 if (preimage)
                 {
-                    subscribeInvoicesCallCallback({
+                    InvoicesStreamCallback({
                         state: 'SETTLED',
                         memo: info.description,
                         r_preimage: Buffer.from(preimage, 'hex'),
@@ -1134,7 +1158,7 @@ router.post('/v2/payinvoice', async function (req, res)
 
                 logger.log('Payment Invoice Date: ' + payInformation.date, [req.id]);
 
-                callPayInvoice.write(inv);
+                paymentStream.write(inv);
 
                 lock.releaseLock();
                 //TODO: Remove res.send. Bot send 2 request
@@ -1258,7 +1282,7 @@ router.post('/payinvoice', async function (req, res)
                 const preimage = await invoice.getPreimage();
                 if (preimage)
                 {
-                    subscribeInvoicesCallCallback({
+                    InvoicesStreamCallback({
                         state: 'SETTLED',
                         memo: info.description,
                         r_preimage: Buffer.from(preimage, 'hex'),
