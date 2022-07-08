@@ -1,4 +1,4 @@
-import { User, Lock, Paym, Invo, Totp } from '../class/';
+import { User, Lock, Paym, Invo, Totp, Wallet } from '../class/';
 const lnurl = require('lnurl');
 import Frisbee from 'frisbee';
 import { stringify } from 'uuid';
@@ -523,6 +523,130 @@ router.post('/bill', postLimiter, async function (req, res)
     {
         logger.log('', [req.id, 'error creating bill:', Error.message]);
         return errorSendCoins(res, Error);
+    }
+});
+
+router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
+{
+    let u = new User(redis, bitcoinclient, lightning);
+    if (!(await u.loadByAuthorization(req.headers.authorization)))
+    {
+        return errorBadAuth(res);
+    }
+    let lock = new Lock(redis, 'load_stablecoin' + u.getUserId());
+    if (!(await lock.obtainLock()))
+    {
+        return;
+    }
+
+    logger.log('/wallet/stablecoin/load (post)', [req.id, u.getUserId()]);
+
+    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+
+    let amount = req.body.amount;
+    let currency = "SATS";
+    
+    try
+    {
+        let amountInSats = await convertAmountToSatoshis(amount, currency);
+        let userBalance = await u.getBalance();
+
+        if (!(userBalance >= amountInSats))
+        {
+            await lock.releaseLock();
+            return errorNotEnougBalance(res);
+        }
+        
+        let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
+        await wallet.loadAccount();
+        let walletId = await wallet.getWalletId();
+        console.log('WalletID' + walletId);
+
+        console.log('Loading transaction...');
+
+        let walletTransaction = await wallet.loadBalanceAmountToStableCoin(amountInSats);
+        await u.saveSwapTx({
+            timestamp: parseInt(+new Date() / 1000),
+            type: 'stablecoin',
+            amount: amount * -1,
+            fee: 0,
+            txid: walletTransaction.id,
+            description: 'Load Stablecoin to wallet Id ' + walletId
+        });
+
+        await lock.releaseLock();
+        res.send(
+            { 
+                txid: walletTransaction.id,
+                amount: walletTransaction.amount, 
+                currency: 'USDC',
+                timestamp: parseInt(+new Date() / 1000)
+            }
+        );
+    } catch (Error)
+    {
+        await lock.releaseLock();
+        logger.error('', [req.id, 'error loading stablecoin:', Error.message]);
+        return errorLoadStableCoins(res, Error);
+    }
+});
+
+router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
+{
+    let u = new User(redis, bitcoinclient, lightning);
+    if (!(await u.loadByAuthorization(req.headers.authorization)))
+    {
+        return errorBadAuth(res);
+    }
+    let lock = new Lock(redis, 'unload_stablecoin' + u.getUserId());
+    if (!(await lock.obtainLock()))
+    {
+        return;
+    }
+
+    logger.log('/wallet/stablecoin/unload (post)', [req.id, u.getUserId()]);
+
+    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+
+    let amount = req.body.amount;
+    
+    try
+    {
+        let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
+        await wallet.loadAccount();
+        let walletBalance = await wallet.getBalance();
+        let walletId = await wallet.getWalletId();
+        
+        if (!(walletBalance >= amount))
+        {
+            await lock.releaseLock();
+            return errorNotEnougBalance(res);
+        }
+
+        let walletTransaction = await wallet.loadStableCoinToBalance(amount);
+        await u.saveSwapTx({
+            timestamp: parseInt(+new Date() / 1000),
+            type: 'stablecoin',
+            amount:  walletTransaction.amountSats,
+            fee: 0,
+            txid: walletTransaction.id,
+            description: 'Unload Stablecoin from wallet Id ' + walletId
+        });
+        
+        await lock.releaseLock();
+        res.send(
+            { 
+                txid: walletTransaction.id,
+                amount: walletTransaction.amountSats, 
+                currency: 'SATS',
+                timestamp: parseInt(+new Date() / 1000)
+            }
+        );
+    } catch (Error)
+    {
+        await lock.releaseLock();
+        logger.error('', [req.id, 'error unloading stablecoin:', Error.message]);
+        return errorLoadStableCoins(res, Error);
     }
 });
 
@@ -1413,10 +1537,16 @@ router.get('/balance', postLimiter, async function (req, res)
         logger.log('/balance', [req.id, u.getUserId()]);
 
         if (!(await u.getAddress())) await u.generateAddress(); // onchain address needed further
+        
         await u.accountForPosibleTxids();
+        
+        let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
+        await wallet.loadAccount();
+        let stableCoinBalance = await wallet.getBalance();
+    
         let balance = await u.getBalance();
         if (balance < 0) balance = 0;
-        res.send({ BTC: { AvailableBalance: balance }, USDC: { AvailableBalance:0 } });
+        res.send({ BTC: { AvailableBalance: balance }, USDC: { AvailableBalance:stableCoinBalance } });
     } catch (Error)
     {
         logger.log('', [req.id, 'error getting balance:', Error, 'userid:', u.getUserId()]);
@@ -1779,4 +1909,20 @@ function errorLndEstimateFee(res, message)
         code: 16,
         message: 'LND failue: ' + message,
     });
+}
+
+function errorLoadStableCoins(res, message)
+{
+    return res.send({
+        error: true,
+        code: 17,
+        message: 'Error loading stable coins:: ' + message,
+    });
+}
+
+const Currency = {
+    BTC: 'BTC',
+    SATS: 'SATS',
+    USDT: 'USDT',
+    USDC: 'USDC'
 }

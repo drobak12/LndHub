@@ -308,6 +308,13 @@ export class User
     async getCalculatedBalance()
     {
         let calculatedBalance = 0;
+
+        let swapTxs = await this.getSwapTx();
+        for(let swapTx of swapTxs){
+            let swapTxData = JSON.parse(swapTx);
+            calculatedBalance += swapTxData.amount;
+        }
+        
         let userinvoices = await this.getUserInvoices();
 
         for (let invo of userinvoices)
@@ -325,7 +332,7 @@ export class User
             {
                 // topup
                 calculatedBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
-            } else if (tx.type === 'user_invoice')
+            } else if (tx.type === 'user_invoice' || tx.type === 'stablecoin')
             {
 
             }
@@ -376,6 +383,16 @@ export class User
     async saveSendCoinsTx(doc)
     {
         return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
+    }
+
+    async saveSwapTx(swap)
+    {
+        return await this._redis.rpush('swap_txs_for_' + this._userid, JSON.stringify(swap));
+    }
+
+    async getSwapTx()
+    {
+        return await this._redis.lrange('swap_txs_for_' + this._userid, 0, -1);
     }
 
     async saveBill(token, bill)
@@ -582,12 +599,19 @@ export class User
             }
         }
         // finaliza prueba
-
+        
+        // SWAP Transactions
+        let swapTxs = await this.getSwapTx();
+        for(let swapTx of swapTxs){
+            result.push(JSON.parse(swapTx));
+        }
+        // END SWAP Transactions
+        
         let range = await this._redis.lrange('txs_for_' + this._userid, 0, -1);
         for (let invoice of range)
         {
             invoice = JSON.parse(invoice);
-            if (invoice.type === "sendcoins")
+            if (invoice.type === "sendcoins" || invoice.type === "stablecoin")
             {
 
             } else
