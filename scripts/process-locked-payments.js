@@ -9,7 +9,7 @@ const config = require('../config');
 /****** START SET FEES FROM CONFIG AT STARTUP ******/
 /** GLOBALS */
 global.forwardFee = config.forwardReserveFee || 0.01;
-global.internalFee = config.intraHubFee || 0.003;
+global.internalFee = config.intraHubFee || 0;
 /****** END SET FEES FROM CONFIG AT STARTUP ******/
 
 var Redis = require('ioredis');

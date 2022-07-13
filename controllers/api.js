@@ -25,7 +25,7 @@ redis.monitor(function (err, monitor)
 /****** START SET FEES FROM CONFIG AT STARTUP ******/
 /** GLOBALS */
 global.forwardFee = config.forwardReserveFee || 0.01;
-global.internalFee = config.intraHubFee || 0.003;
+global.internalFee = config.intraHubFee || 0;
 /****** END SET FEES FROM CONFIG AT STARTUP ******/
 
 let bitcoinclient = require('../bitcoin');
@@ -533,7 +533,7 @@ async function updateConvertRatios()
     for (var i = 0; i < currencies.length; i++)
     {
         let currency = currencies[i];
-        console.log('updating currency:' + currency);
+        //console.log('updating currency:' + currency);
 
         try
         {
@@ -541,7 +541,7 @@ async function updateConvertRatios()
             const apiResponse = await new Frisbee().get(url); //{"BTC_USD":19474.1778}
             let ratio = apiResponse.body['BTC_' + currency];
 
-            console.log('updating currency ratio:' + currency + '=' + ratio);
+            //console.log('updating currency ratio:' + currency + '=' + ratio);
 
             let key = 'convert_ratio_BTC_' + currency;
             await redis.set(key, ratio);
@@ -561,7 +561,7 @@ async function updateConvertRatios()
             ]);
         }
     }
-    console.log('updateConvertRatios: END');
+    //console.log('updateConvertRatios: END');
 }
 
 updateConvertRatios();
