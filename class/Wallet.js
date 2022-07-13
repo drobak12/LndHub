@@ -9,7 +9,7 @@ export class Wallet
         this._currency = currency;
         this._redis = redis;
         this._walletMs = new WalletMS();
-        this._exchange = new Exchange;
+        this._exchange = new Exchange(this._redis);
     }
 
     async loadAccount(){
@@ -23,14 +23,21 @@ export class Wallet
         return this._walletMs.getBalance(await this.getWalletId());
     }
 
-    async loadBalanceAmountToStableCoin(amount){
-        let stableCoins = await this._exchange.swapSatsToUSDC(amount);
+    async getBalanceInSats(){
+        let walletBalance = await this._walletMs.getBalance(await this.getWalletId());
+        return await this._exchange.toSats(walletBalance, this._currency)
+    }
+
+    async loadBalanceAmountToWallet(amountSats){
+        let stableCoins = await this._exchange.satsTo(amountSats, this._currency);
+        console.log('Savinds stable coins: ' + stableCoins);
         return await this._walletMs.saveTransaction(await this.getWalletId(), this._userid, stableCoins);
     }
 
-    async loadStableCoinToBalance(amount){
-        let transaction = await this._walletMs.saveTransaction(await this.getWalletId(), this._userid, amount*-1);
-        transaction.amountSats = await this._exchange.swapUSDCToSats(amount);
+    async loadStableCoinToBalance(amountSats){
+        let stableCoins = await this._exchange.satsTo(amountSats, this._currency);
+        let transaction = await this._walletMs.saveTransaction(await this.getWalletId(), this._userid, stableCoins*-1);
+        transaction.amountSats = await this._exchange.toSats(stableCoins, this._currency);
         return transaction;
     }
 
@@ -41,6 +48,10 @@ export class Wallet
     async getWalletId(){
         let data = await this._redis.get('wallet_account_' + this._userid);
         return parseInt(data);
+    }
+
+    async getCurrency(){
+        return this._currency;
     }
 
 }

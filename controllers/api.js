@@ -510,18 +510,42 @@ router.post('/bill', postLimiter, async function (req, res)
 
     let amountInSats = await convertAmountToSatoshis(amount, currency);
 
+    logger.log('User.createBill', [req.id, u.getUserId(), amount, currency, amountInSats]);
+    let lock = new Lock(redis, 'creating_bill_for' + u.getUserId());
+    if (!(await lock.obtainLock()))
+    {
+        return errorLockUser(res);
+    }
+
     try
     {
-        let host = config.callbackHost;
+        let userBalance;
+        try
+        {
+            await u.clearBalanceCache();
+            userBalance = await u.getCalculatedBalance();
+        } catch (Error)
+        {
+            logger.log('User.createBill', [req.id, 'error running getCalculatedBalance():', Error.message]);
+            lock.releaseLock();
+            return errorTryAgainLater(res);
+        }
+        logger.log('User.createBill', [req.id, 'Balance: ' + userBalance]);
+
+        // Check balance
+        if (!(userBalance >= +amountInSats + Math.floor(amountInSats * forwardFee) + 1))
+        {
+            await lock.releaseLock();
+            return errorNotEnougBalance(res);
+        }
+
         let bill = await u.createBill(req.id, amount, currency, amountInSats);
-        let callbackUrl = host + config.billUrl + "?token=" + bill.token;
-
-        const encoded = bill.token;//lnurl.encode(callbackUrl);    
-
-        res.send({ bill: bill, bill_request: encoded });
+        lock.releaseLock();
+        return res.send({ bill: bill, bill_request: bill.token });
     } catch (Error)
     {
         logger.log('', [req.id, 'error creating bill:', Error.message]);
+        lock.releaseLock();
         return errorSendCoins(res, Error);
     }
 });
@@ -544,11 +568,14 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
     if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
 
     let amount = req.body.amount;
-    let currency = "SATS";
+    let currency = req.body.currency;
+    if (!currency)
+        currency = "SATS";
     
     try
     {
         let amountInSats = await convertAmountToSatoshis(amount, currency);
+        console.log('Amount SATS: ' + amountInSats);
         let userBalance = await u.getBalance();
 
         if (!(userBalance >= amountInSats))
@@ -564,11 +591,11 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
 
         console.log('Loading transaction...');
 
-        let walletTransaction = await wallet.loadBalanceAmountToStableCoin(amountInSats);
+        let walletTransaction = await wallet.loadBalanceAmountToWallet(amountInSats);
         await u.saveSwapTx({
             timestamp: parseInt(+new Date() / 1000),
             type: 'stablecoin',
-            amount: amount * -1,
+            amount: amountInSats * -1,
             fee: 0,
             txid: walletTransaction.id,
             description: 'Load Stablecoin to wallet Id ' + walletId
@@ -579,7 +606,7 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
             { 
                 txid: walletTransaction.id,
                 amount: walletTransaction.amount, 
-                currency: 'USDC',
+                currency: await wallet.getCurrency(),
                 timestamp: parseInt(+new Date() / 1000)
             }
         );
@@ -609,21 +636,27 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
     if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
 
     let amount = req.body.amount;
+    let currency = req.body.currency;
+    if (!currency)
+        currency = "SATS";
     
     try
     {
+        let amountInSats = await convertAmountToSatoshis(amount, currency);
+        
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
-        let walletBalance = await wallet.getBalance();
+        let walletBalanceSats = await wallet.getBalanceInSats();
         let walletId = await wallet.getWalletId();
         
-        if (!(walletBalance >= amount))
+        console.log('::' + walletBalanceSats + '-' + amountInSats);
+        if (!(walletBalanceSats >= amountInSats))
         {
             await lock.releaseLock();
             return errorNotEnougBalance(res);
         }
 
-        let walletTransaction = await wallet.loadStableCoinToBalance(amount);
+        let walletTransaction = await wallet.loadStableCoinToBalance(amountInSats);
         await u.saveSwapTx({
             timestamp: parseInt(+new Date() / 1000),
             type: 'stablecoin',
@@ -669,12 +702,21 @@ async function updateConvertRatios()
 
             let key = 'convert_ratio_BTC_' + currency;
             await redis.set(key, ratio);
+            
+            let urlToBtc = config.currencyConvert.urlCurrencyToBtc.replace('{currency}', currency);
+            const apiResponseInvert = await new Frisbee().get(urlToBtc); //{"USD_BTC":0.000050267979}
+            let ratioInvert = apiResponseInvert.body[currency + '_BTC'];
+
+            let keyInvert = 'convert_ratio_' + currency + '_BTC';
+            await redis.set(keyInvert, ratioInvert);
 
             if (currency==="USD")
             {
                 currency = "USDC"
                 let key = 'convert_ratio_BTC_' + currency;
+                let keyInvert = 'convert_ratio_' + currency + '_BTC';
                 await redis.set(key, ratio);
+                await redis.set(keyInvert, ratioInvert);
             }
 
         } catch (Error)

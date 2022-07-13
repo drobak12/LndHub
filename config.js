@@ -31,6 +31,7 @@ let config = {
   },
   currencyConvert:{
     url: 'https://free.currconv.com/api/v7/convert?apiKey=40b360058919ec2bc32e&compact=ultra&q=BTC_',
+    urlCurrencyToBtc: 'https://free.currconv.com/api/v7/convert?apiKey=40b360058919ec2bc32e&compact=ultra&q={currency}_BTC',
     updateIntervalMillis :1200000,
     currencies: ['USD', 'EUR', 'BRL', 'JPY', 'UYU']
   }
