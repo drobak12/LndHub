@@ -575,7 +575,6 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
     try
     {
         let amountInSats = await convertAmountToSatoshis(amount, currency);
-        console.log('Amount SATS: ' + amountInSats);
         let userBalance = await u.getBalance();
 
         if (!(userBalance >= amountInSats))
@@ -587,10 +586,7 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
         let walletId = await wallet.getWalletId();
-        console.log('WalletID' + walletId);
-
-        console.log('Loading transaction...');
-
+        
         let walletTransaction = await wallet.loadBalanceAmountToWallet(amountInSats);
         await u.saveSwapTx({
             timestamp: parseInt(+new Date() / 1000),
@@ -598,7 +594,7 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
             amount: amountInSats * -1,
             fee: 0,
             txid: walletTransaction.id,
-            description: 'Load Stablecoin to wallet Id ' + walletId
+            description: 'Swap to Wallet(USDC): ' + walletTransaction.amount + ' ' + await wallet.getCurrency()
         });
 
         await lock.releaseLock();
@@ -647,9 +643,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
         let walletBalanceSats = await wallet.getBalanceInSats();
-        let walletId = await wallet.getWalletId();
         
-        console.log('::' + walletBalanceSats + '-' + amountInSats);
         if (!(walletBalanceSats >= amountInSats))
         {
             await lock.releaseLock();
@@ -663,7 +657,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
             amount:  walletTransaction.amountSats,
             fee: 0,
             txid: walletTransaction.id,
-            description: 'Unload Stablecoin from wallet Id ' + walletId
+            description: 'Swap to Wallet(SATS): ' + walletTransaction.amount  + ' ' + await wallet.getCurrency()
         });
         
         await lock.releaseLock();
@@ -721,7 +715,7 @@ async function updateConvertRatios()
 
         } catch (Error)
         {
-            logger.log('api.updateConvertRatios', [
+            logger.error('api.updateConvertRatios', [
                 'error updating currency ' + currency + ':',
                 Error.message,
             ]);
