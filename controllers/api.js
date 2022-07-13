@@ -585,7 +585,6 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
-        let walletId = await wallet.getWalletId();
         
         let walletTransaction = await wallet.loadBalanceAmountToWallet(amountInSats);
         await u.saveSwapTx({
@@ -597,13 +596,21 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
             description: 'Swap to Wallet(USDC): ' + walletTransaction.amount + ' ' + await wallet.getCurrency()
         });
 
+        await u.clearBalanceCache();
         await lock.releaseLock();
         res.send(
             { 
                 txid: walletTransaction.id,
-                amount: walletTransaction.amount, 
-                currency: await wallet.getCurrency(),
-                timestamp: parseInt(+new Date() / 1000)
+                timestamp: parseInt(+new Date() / 1000),
+                exchange_sats: amountInSats,
+                input: {
+                    amount: amount,
+                    currency: currency
+                }, 
+                output: {
+                    amount: walletTransaction.amount, 
+                    currency: await wallet.getCurrency()
+                }
             }
         );
     } catch (Error)
@@ -664,9 +671,16 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
         res.send(
             { 
                 txid: walletTransaction.id,
-                amount: walletTransaction.amountSats, 
-                currency: 'SATS',
-                timestamp: parseInt(+new Date() / 1000)
+                timestamp: parseInt(+new Date() / 1000),
+                exchange_sats: walletTransaction.amountSats,
+                input: {
+                    amount: amount,
+                    currency: currency
+                }, 
+                output: {
+                    amount: walletTransaction.amountSats, 
+                    currency: 'SATS'
+                }
             }
         );
     } catch (Error)
