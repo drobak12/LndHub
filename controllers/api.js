@@ -903,7 +903,7 @@ router.get('/bill/process', async function (req, res)
             info.num_satoshis = freeAmount;
         }
 
-        if (userBalance >= +info.num_satoshis + Math.ceil(info.num_satoshis * forwardFee))
+        if (userBalance >= +info.num_satoshis + Math.ceil(info.num_satoshis * internalFee))
         {
             // got enough balance, including 1% of payment amount - reserve for fees
 
