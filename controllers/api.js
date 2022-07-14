@@ -533,6 +533,7 @@ router.post('/bill', postLimiter, async function (req, res)
         logger.log('User.createBill', [req.id, 'Balance: ' + userBalance]);
 
         // Check balance
+        console.log('userBalance::' + userBalance +'-'+'amountInSats:: ' + amountInSats +'fee::' + Math.ceil(amountInSats * forwardFee))
         if (!(userBalance >= +amountInSats + Math.ceil(amountInSats * forwardFee)))
         {
             await lock.releaseLock();
@@ -1395,7 +1396,7 @@ router.post('/payinvoice', async function (req, res)
         return errorTryAgainLater(res);
     }
 
-    lightning.decodePayReq({ pay_req: req.body.invoice }, async function (err, info)
+    lightning.decodePa/yReq({ pay_req: req.body.invoice }, async function (err, info)
     {
         if (err)
         {
