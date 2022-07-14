@@ -533,7 +533,7 @@ router.post('/bill', postLimiter, async function (req, res)
         logger.log('User.createBill', [req.id, 'Balance: ' + userBalance]);
 
         // Check balance
-        if (!(userBalance >= +amountInSats + Math.ceil(amountInSats * forwardFee) ))
+        if (!(userBalance >= +amountInSats + Math.ceil(amountInSats * forwardFee)))
         {
             await lock.releaseLock();
             return errorNotEnougBalance(res);
@@ -707,6 +707,7 @@ async function updateConvertRatios()
             let ratio = apiResponse.body['BTC_' + currency];
 
             //console.log('updating currency ratio:' + currency + '=' + ratio);
+
             let key = 'convert_ratio_BTC_' + currency;
             await redis.set(key, ratio);
             
@@ -901,7 +902,7 @@ router.get('/bill/process', async function (req, res)
             info.num_satoshis = freeAmount;
         }
 
-        if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1)
+        if (userBalance >= +info.num_satoshis + Math.ceil(info.num_satoshis * forwardFee))
         {
             // got enough balance, including 1% of payment amount - reserve for fees
 
@@ -932,8 +933,8 @@ router.get('/bill/process', async function (req, res)
                 await u.savePaidLndInvoice({
                     timestamp: parseInt(+new Date() / 1000),
                     type: 'paid_invoice',
-                    value: +info.num_satoshis + Math.floor(info.num_satoshis * internalFee),
-                    fee: Math.floor(info.num_satoshis * internalFee),
+                    value: +info.num_satoshis + Math.ceil(info.num_satoshis * internalFee),
+                    fee: Math.ceil(info.num_satoshis * internalFee),
                     memo: decodeURIComponent(info.description),
                     pay_req: paymentRequest,
                 });
@@ -999,7 +1000,7 @@ router.get('/bill/process', async function (req, res)
             let inv = {
                 payment_request: paymentRequest,
                 amt: info.num_satoshis, // amt is used only for 'tip' invoices
-                fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
+                fee_limit: { fixed: Math.ceil(info.num_satoshis * forwardFee) },
             };
             try
             {
@@ -1227,7 +1228,7 @@ router.post('/v2/payinvoice', async function (req, res)
 
         logger.log('/v2/payinvoice', [req.id, u.getUserId(), 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
 
-        if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1)
+        if (userBalance >= +info.num_satoshis + Math.ceil(info.num_satoshis * forwardFee))
         {
             // got enough balance, including 1% of payment amount - reserve for fees
 
@@ -1266,7 +1267,7 @@ router.post('/v2/payinvoice', async function (req, res)
                 UserPayee._userid = userid_payee; // hacky, fixme
                 await UserPayee.clearBalanceCache();
 
-                let fees_to_pay = Math.floor(info.num_satoshis * internalFee);
+                let fees_to_pay = Math.ceil(info.num_satoshis * internalFee);
                 // sender spent his balance:
                 await u.clearBalanceCache();
                 await u.savePaidLndInvoice({
@@ -1314,7 +1315,7 @@ router.post('/v2/payinvoice', async function (req, res)
             let inv = {
                 payment_request: req.body.invoice,
                 amt: info.num_satoshis, // amt is used only for 'tip' invoices
-                fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
+                fee_limit: { fixed: Math.ceil(info.num_satoshis * forwardFee) },
             };
             try
             {
