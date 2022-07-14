@@ -533,7 +533,7 @@ router.post('/bill', postLimiter, async function (req, res)
         logger.log('User.createBill', [req.id, 'Balance: ' + userBalance]);
 
         // Check balance
-        if (!(userBalance >= +amountInSats + Math.floor(amountInSats * forwardFee) + 1))
+        if (!(userBalance >= +amountInSats + Math.ceil(amountInSats * forwardFee) ))
         {
             await lock.releaseLock();
             return errorNotEnougBalance(res);
@@ -707,7 +707,6 @@ async function updateConvertRatios()
             let ratio = apiResponse.body['BTC_' + currency];
 
             //console.log('updating currency ratio:' + currency + '=' + ratio);
-
             let key = 'convert_ratio_BTC_' + currency;
             await redis.set(key, ratio);
             
