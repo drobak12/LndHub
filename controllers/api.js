@@ -534,7 +534,7 @@ router.post('/bill', postLimiter, async function (req, res)
 
         // Check balance
         console.log('userBalance::' + userBalance +'-'+'amountInSats:: ' + amountInSats +'fee::' + Math.ceil(amountInSats * forwardFee))
-        if (!(userBalance >= +amountInSats + Math.ceil(amountInSats * forwardFee)))
+        if (!(userBalance >= +amountInSats + Math.ceil(amountInSats * internalFee)))
         {
             await lock.releaseLock();
             return errorNotEnougBalance(res);
