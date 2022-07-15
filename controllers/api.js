@@ -576,9 +576,12 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
     try
     {
         let amountInSats = await convertAmountToSatoshis(amount, currency);
+        amountInSats = Math.round(amountInSats);
+        let fee = Math.floor(0); //TODO: calculate fee;
+
         let userBalance = await u.getBalance();
 
-        if (!(userBalance >= amountInSats))
+        if (!(userBalance >= amountInSats + fee))
         {
             await lock.releaseLock();
             return errorNotEnougBalance(res);
@@ -591,19 +594,21 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         await u.saveSwapTx({
             timestamp: parseInt(+new Date() / 1000),
             type: 'stablecoin',
-            amount: amountInSats * -1,
-            fee: 0,
+            amount: -(amountInSats + fee),
+            fee: fee,
             txid: walletTransaction.id,
-            description: 'Swap to Wallet(USDC): ' + walletTransaction.amount + ' ' + await wallet.getCurrency()
+            description: 'Swap to USDC: ' + amountInSats + ' SATS'
         });
 
         await u.clearBalanceCache();
         await lock.releaseLock();
         res.send(
             { 
+                type:"load",
                 txid: walletTransaction.id,
                 timestamp: parseInt(+new Date() / 1000),
-                exchange_sats: amountInSats,
+                exchange_amount: amountInSats+fee,
+                fee: fee,
                 input: {
                     amount: amount,
                     currency: currency
@@ -647,7 +652,8 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
     try
     {
         let amountInSats = await convertAmountToSatoshis(amount, currency);
-        
+        amountInSats = Math.round(amountInSats);
+
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
         let walletBalanceSats = await wallet.getBalanceInSats();
@@ -659,27 +665,30 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
         }
 
         let walletTransaction = await wallet.loadStableCoinToBalance(amountInSats);
+        let fee = Math.floor(0); //TODO: calculate fee: walletTransaction.fee
+
         await u.saveSwapTx({
             timestamp: parseInt(+new Date() / 1000),
             type: 'stablecoin',
-            amount:  walletTransaction.amountSats,
-            fee: 0,
+            amount:  walletTransaction.amountSats - fee,
+            fee: fee,
             txid: walletTransaction.id,
-            description: 'Swap to Wallet(SATS): ' + walletTransaction.amount  + ' ' + await wallet.getCurrency()
+            description: 'Swap from USDC: ' + walletTransaction.amountSats + ' SATS'
         });
         
         await lock.releaseLock();
         res.send(
             { 
+                type: "unload",
                 txid: walletTransaction.id,
                 timestamp: parseInt(+new Date() / 1000),
-                exchange_sats: walletTransaction.amountSats,
+                exchange_amount: walletTransaction.amount ,
                 input: {
                     amount: amount,
                     currency: currency
                 }, 
                 output: {
-                    amount: walletTransaction.amountSats, 
+                    amount: walletTransaction.amountSats - fee, 
                     currency: 'SATS'
                 }
             }
@@ -706,7 +715,11 @@ async function updateConvertRatios()
             let url = config.currencyConvert.url + currency;
             const apiResponse = await new Frisbee().get(url); //{"BTC_USD":19474.1778}
             let ratio = apiResponse.body['BTC_' + currency];
-
+            if (!ratio )
+            {
+                logger.error('api.updateConvertRatios', ['error updating currency ' + currency + ': bad response from server']);
+                break;
+            }
             //console.log('updating currency ratio:' + currency + '=' + ratio);
 
             let key = 'convert_ratio_BTC_' + currency;
