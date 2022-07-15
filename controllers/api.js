@@ -558,6 +558,9 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
     {
         return errorBadAuth(res);
     }
+    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+
+
     let lock = new Lock(redis, 'load_stablecoin' + u.getUserId());
     if (!(await lock.obtainLock()))
     {
@@ -565,9 +568,6 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
     }
 
     logger.log('/wallet/stablecoin/load (post)', [req.id, u.getUserId()]);
-
-    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
-
     let amount = req.body.amount;
     let currency = req.body.currency;
     if (!currency)
@@ -578,6 +578,12 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         let amountInSats = await convertAmountToSatoshis(amount, currency);
         amountInSats = Math.round(amountInSats);
         let fee = Math.floor(0); //TODO: calculate fee;
+
+        /*if (amountInSats < config.swap.min_swap_sats)
+        {
+            await lock.releaseLock();
+            return errorSwapTooSmall(res, "" + amountInSats );
+        }*/
 
         let userBalance = await u.getBalance();
 
@@ -634,6 +640,8 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
     {
         return errorBadAuth(res);
     }
+    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+
     let lock = new Lock(redis, 'unload_stablecoin' + u.getUserId());
     if (!(await lock.obtainLock()))
     {
@@ -642,7 +650,6 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
 
     logger.log('/wallet/stablecoin/unload (post)', [req.id, u.getUserId()]);
 
-    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
 
     let amount = req.body.amount;
     let currency = req.body.currency;
@@ -683,6 +690,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
                 txid: walletTransaction.id,
                 timestamp: parseInt(+new Date() / 1000),
                 exchange_amount: walletTransaction.amount ,
+                fee: fee,
                 input: {
                     amount: amount,
                     currency: currency
@@ -1170,13 +1178,18 @@ router.post('/addinvoice', postLimiter, async function (req, res)
     logger.log('/addinvoice', [req.id, u.getUserId()]);
 
     if (!req.body.amt || /*stupid NaN*/ !(req.body.amt > 0)) return errorBadArguments(res);
+    
+    let currency = Currency.SATS;
+    if (!req.body.currency )
+        currency = req.body.currency;
+    let amount = Math.round(await convertAmountToSatoshis(req.body.amt,currency));
 
     if (config.sunset) return errorSunsetAddInvoice(res);
 
     const invoice = new Invo(redis, bitcoinclient, lightning);
     const r_preimage = invoice.makePreimageHex();
     lightning.addInvoice(
-        { memo: req.body.memo, value: req.body.amt, expiry: 3600 * 24, r_preimage: Buffer.from(r_preimage, 'hex').toString('base64') },
+        { memo: req.body.memo, value: amount, expiry: 3600 * 24, r_preimage: Buffer.from(r_preimage, 'hex').toString('base64') },
         async function (err, info)
         {
             if (err) return errorLnd(res);
@@ -1980,7 +1993,18 @@ function errorLoadStableCoins(res, message)
     return res.send({
         error: true,
         code: 17,
-        message: 'Error loading stable coins:: ' + message,
+        message: 'Error loading stable coins: ' + message,
+    });
+}
+
+
+function errorSwapTooSmall(res, message)
+{
+    return res.send({
+        error: true,
+        code: 18,
+        min_swap_sats: config.swap.min_swap_sats,
+        message: 'Error swap too small: ' + message,
     });
 }
 

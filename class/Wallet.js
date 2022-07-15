@@ -37,7 +37,7 @@ export class Wallet
     async loadStableCoinToBalance(amountSats){
         let stableCoins = await this._exchange.satsTo(amountSats, this._currency);
         let transaction = await this._walletMs.saveTransaction(await this.getWalletId(), this._userid, stableCoins*-1);
-        transaction.amountSats = await this._exchange.toSats(stableCoins, this._currency);
+        transaction.amountSats = Math.round(await this._exchange.toSats(stableCoins, this._currency));
         return transaction;
     }
 
