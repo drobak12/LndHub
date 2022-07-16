@@ -21,10 +21,9 @@ const logFormat = printf((info) => {
 const logger = createLogger({
   level: 'info',
   format: combine(timestamp(), logFormat),
-  transports: [
-    new transports.Console({
-      level: 'error',
-    }),
+  transports: 
+  [
+    //new transports.Console({level: 'error',}),
     new transports.Console(),
   ],
 });

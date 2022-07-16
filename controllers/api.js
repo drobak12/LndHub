@@ -713,6 +713,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
 async function updateConvertRatios()
 {
     let currencies = config.currencyConvert.currencies;
+    //console.log('api.updateConvertRatios:' + JSON.stringify(currencies));
     for (var i = 0; i < currencies.length; i++)
     {
         let currency = currencies[i];
@@ -722,12 +723,12 @@ async function updateConvertRatios()
         {
             let url = config.currencyConvert.url + currency;
             const apiResponse = await new Frisbee().get(url); //{"BTC_USD":19474.1778}
-            let ratio = apiResponse.body['BTC_' + currency];
-            if (!ratio )
+            if (!apiResponse || !apiResponse.body)
             {
                 logger.error('api.updateConvertRatios', ['error updating currency ' + currency + ': bad response from server']);
                 break;
             }
+            let ratio = apiResponse.body['BTC_' + currency];
             //console.log('updating currency ratio:' + currency + '=' + ratio);
 
             let key = 'convert_ratio_BTC_' + currency;
