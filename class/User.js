@@ -168,6 +168,7 @@ export class User
             let bill = {
                 token: token,
                 amount: amount,
+                requestId: requestId, 
                 timestamp: timestamp,
                 created_by: this.getUserId(),
                 currency: currency,
@@ -177,6 +178,8 @@ export class User
 
             this.saveBill(token, bill);
             delete bill.created_by;
+            delete bill.requestId;
+            
             return bill;
         } catch (Error)
         {
