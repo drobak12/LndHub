@@ -1181,7 +1181,7 @@ router.post('/addinvoice', postLimiter, async function (req, res)
     if (!req.body.amt || /*stupid NaN*/ !(req.body.amt > 0)) return errorBadArguments(res);
     
     let currency = Currency.SATS;
-    if (!req.body.currency )
+    if (req.body.currency)
         currency = req.body.currency;
     let amount = Math.round(await convertAmountToSatoshis(req.body.amt,currency));
 
