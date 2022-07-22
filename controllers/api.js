@@ -585,7 +585,7 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         if (amountInSats < amountInSatsMinSwap)
         {
             await lock.releaseLock();
-            return errorSwapTooSmall(res, "" + amountInSats );
+            return errorSwapTooSmall(res, amountInSats );
         }
 
         let userBalance = await u.getBalance();
@@ -668,7 +668,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
         if (amountInSats < amountInSatsMinSwap)
         {
             await lock.releaseLock();
-            return errorSwapTooSmall(res, "" + amountInSats );
+            return errorSwapTooSmall(res, amountInSats );
         }
         
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
@@ -2028,7 +2028,8 @@ function errorSwapTooSmall(res, message)
     return res.send({
         error: true,
         code: 18,
-        min_swap_sats: config.swap.min_swap_value + ' ' + config.swap.min_swap_currency,
+        min_swap_sats: message,
+        min_swap: config.swap.min_swap_value + ' ' + config.swap.min_swap_currency, 
         message: 'Error swap too small: ' + message,
     });
 }
