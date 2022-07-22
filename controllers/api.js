@@ -87,8 +87,6 @@ redis.info(function (err, info)
 
 const InvoicesStreamCallback = async function (response)
 {
-    delete response.bill.token;
-
     if (response.state !== 'SETTLED'){
         logger.log('api.InvoicesStreamCallback', [JSON.stringify(response)]);
         return;
