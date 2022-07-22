@@ -585,7 +585,7 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         if (amountInSats < amountInSatsMinSwap)
         {
             await lock.releaseLock();
-            return errorSwapTooSmall(res, amountInSats );
+            return errorSwapTooSmall(res, amountInSatsMinSwap );
         }
 
         let userBalance = await u.getBalance();
@@ -668,7 +668,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
         if (amountInSats < amountInSatsMinSwap)
         {
             await lock.releaseLock();
-            return errorSwapTooSmall(res, amountInSats );
+            return errorSwapTooSmall(res, amountInSatsMinSwap );
         }
         
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
