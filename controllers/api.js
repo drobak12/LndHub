@@ -135,6 +135,7 @@ const InvoicesStreamCallback = async function (response)
             total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
             time: Math.trunc(new Date().getTime() / 1000),
             payer: response.payer,
+            payee: response.payee,
             type: response.type,
             bill_amount: response.bill.amount,
             bill_currency: response.bill.currency
