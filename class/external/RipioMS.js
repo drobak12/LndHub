@@ -18,19 +18,18 @@ export class RipioMS extends IExchangeService
     }
 
     async createAccount(userId){
-        if(!await this._getReferenceId(userId)){
-            let exchangeReferenceId = await this._performCreateAccount(userId);
-            await this.saveExchangeAccount(exchangeReferenceId);
+        if(!await this._getReferenceId(config.exchangeMs.userId)){
+            let exchangeReferenceId = await this._performCreateAccount(config.exchangeMs.userId);
+            await this._saveExchangeAccount(exchangeReferenceId);
         }
     }
 
     async loadStableCoin(userId, transactionId, amount, currencyOrigin, currencyDestination){
 
         userId = userId.replace('.', '_');
-        userId = 'WHATSAPP_573016347804'; //TODO: Remove:: Currently WHATSAPP_573016347804 has balance. This is the unique account
+        userId = config.exchangeMs.userId;
         
         let pair = currencyOrigin + '_' + currencyDestination;
-        let loadResponse = await this._loadBalanceToUser(userId, amount, currencyOrigin, transactionId);
         let quote = await this._createQuote(pair, transactionId);
         let response = await this._executeQuote(quote.id, amount, transactionId, userId);
         
@@ -43,7 +42,9 @@ export class RipioMS extends IExchangeService
     async unloadStableCoin(userId, transactionId, amount, currencyOrigin, currencyDestination){
 
         userId = userId.replace('.', '_');
+        userId = config.exchangeMs.userId;
         amount = amount.toFixed(8);
+        
         let pair = currencyOrigin + '_' + currencyDestination;
         let quote = await this._createQuote(pair, transactionId);
 
@@ -52,7 +53,7 @@ export class RipioMS extends IExchangeService
         return new TransactionExchange(
             response.txn_id, transactionId, amount, currencyOrigin, currencyDestination, 
             response.quote_amount, response.charged_fee, response.rate
-        )
+        );
     }
 
     async retrieveBalance(userId, currency){
@@ -79,12 +80,6 @@ export class RipioMS extends IExchangeService
             }
         }
         return 0;
-    }
-
-    async _loadBalanceToUser(userId, amount, currency, transactionId){
-        return {
-            status: 'OK'
-        };
     }
 
     async _executeQuote(quoteId, amount, transactionId, userId){

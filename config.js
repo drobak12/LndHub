@@ -49,7 +49,7 @@ let config = {
     grantType: 'client_credentials',
     clientId: 'ynPaww60Yzb3ib16Mu4rnUS71Mw1Sx7wbWswOUfi',
     clientSecret: 'N8KBd1gYViHnW0vNQ4j9TKIN4H1tqaX88meIm1h9ZCULE49q9PNLC63uu2OuRLMyyHzkKxRhmdIDlXIHhc1cAit2pDaoLj1MyGp2xaggPWWhaEbTDUOmpOX0tNm47ke0',
-    networkBtc: 'BITCOIN_TESTNET',
+    userId: 'WHATSAPP_573016347804',
     createAccountUrl: '/api/v1/end-users/',
     authenticationUrl: '/oauth2/token/',
     balanceUrl: '/api/v1/end-users/{user-id}/balances/',
