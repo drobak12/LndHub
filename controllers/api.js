@@ -1,4 +1,5 @@
 import { User, Lock, Paym, Invo, Totp, Wallet } from '../class/';
+import { WalletMS } from '../class/external/WalletMS';
 const lnurl = require('lnurl');
 import Frisbee from 'frisbee';
 import { stringify } from 'uuid';
@@ -86,9 +87,12 @@ redis.info(function (err, info)
 
 const InvoicesStreamCallback = async function (response)
 {
-    logger.log('api.InvoicesStreamCallback', [JSON.stringify(response)]);
-    if (response.state !== 'SETTLED')
+    delete response.bill.token;
+
+    if (response.state !== 'SETTLED'){
+        logger.log('api.InvoicesStreamCallback', [JSON.stringify(response)]);
         return;
+    }
 
     const LightningInvoiceSettledNotification = {
         memo: response.memo,
@@ -112,7 +116,7 @@ const InvoicesStreamCallback = async function (response)
     const user = new User(redis, bitcoinclient, lightning);
     user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
     await user.clearBalanceCache();
-    logger.log('api.InvoicesStreamCallback', [user._userid, LightningInvoiceSettledNotification.hash]);
+    logger.log('api.InvoicesStreamCallback', [user._userid, LightningInvoiceSettledNotification.hash, JSON.stringify(response)]);
 
 
     if (!response.type)
@@ -579,11 +583,12 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         amountInSats = Math.round(amountInSats);
         let fee = Math.floor(0); //TODO: calculate fee;
 
-        /*if (amountInSats < config.swap.min_swap_sats)
+        let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+        if (amountInSats < amountInSatsMinSwap)
         {
             await lock.releaseLock();
             return errorSwapTooSmall(res, "" + amountInSats );
-        }*/
+        }
 
         let userBalance = await u.getBalance();
 
@@ -595,8 +600,8 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
         
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
+        let walletTransaction = await wallet.loadBalanceAmountToWallet(amountInSats, req.id);
         
-        let walletTransaction = await wallet.loadBalanceAmountToWallet(amountInSats);
         await u.saveSwapTx({
             timestamp: parseInt(+new Date() / 1000),
             type: 'stablecoin',
@@ -661,6 +666,13 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
         let amountInSats = await convertAmountToSatoshis(amount, currency);
         amountInSats = Math.round(amountInSats);
 
+        let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+        if (amountInSats < amountInSatsMinSwap)
+        {
+            await lock.releaseLock();
+            return errorSwapTooSmall(res, "" + amountInSats );
+        }
+        
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
         let walletBalanceSats = await wallet.getBalanceInSats();
@@ -671,7 +683,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
             return errorNotEnougBalance(res);
         }
 
-        let walletTransaction = await wallet.loadStableCoinToBalance(amountInSats);
+        let walletTransaction = await wallet.loadStableCoinToBalance(amountInSats, req.id);
         let fee = Math.floor(0); //TODO: calculate fee: walletTransaction.fee
 
         await u.saveSwapTx({
@@ -704,11 +716,22 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
     } catch (Error)
     {
         await lock.releaseLock();
-        logger.error('', [req.id, 'error unloading stablecoin:', Error.message]);
-        return errorLoadStableCoins(res, Error);
+        logger.error('', [req.id, 'error unloading stablecoin:', Error]);
+        return errorUnloadStableCoins(res, Error);
     }
 });
 
+async function checkMasterAccount()
+{
+    logger.log('Checking master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency);
+    if(!await redis.get('wallet_account_' + config.wallet.masterAccount)){
+        logger.log('Creating master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency);
+        let walletMS = new WalletMS();
+        let walletId = await walletMS.createAccount(config.wallet.masterAccount);
+        logger.log('Saving walletId for Master Account: ' + walletId);
+        redis.set('wallet_account_' + config.wallet.masterAccount, new String(walletId));
+    }
+}
 
 async function updateConvertRatios()
 {
@@ -761,6 +784,7 @@ async function updateConvertRatios()
     //console.log('updateConvertRatios: END');
 }
 
+checkMasterAccount();
 updateConvertRatios();
 setInterval(updateConvertRatios, config.currencyConvert.updateIntervalMillis);
 
@@ -978,6 +1002,7 @@ router.get('/bill/process', async function (req, res)
                         amt_paid_sat: +info.num_satoshis,
                         type: 'bill_pay',
                         payer: u.getUserId(),
+                        payee: userid_payee,
                         bill: bill
                     });
                 }
@@ -1621,13 +1646,13 @@ router.get('/balance', postLimiter, async function (req, res)
         let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
         await wallet.loadAccount();
         let stableCoinBalance = await wallet.getBalance();
-    
         let balance = await u.getBalance();
+
         if (balance < 0) balance = 0;
         res.send({ BTC: { AvailableBalance: balance }, USDC: { AvailableBalance:stableCoinBalance } });
     } catch (Error)
     {
-        logger.log('', [req.id, 'error getting balance:', Error, 'userid:', u.getUserId()]);
+        logger.log(Error, [req.id, 'error getting balance:', Error, 'userid:', u.getUserId()]);
         return errorGeneralServerError(res);
     }
 });
@@ -1989,12 +2014,13 @@ function errorLndEstimateFee(res, message)
     });
 }
 
-function errorLoadStableCoins(res, message)
+function errorLoadStableCoins(res, error)
 {
     return res.send({
         error: true,
         code: 17,
-        message: 'Error loading stable coins: ' + message,
+        message: 'Error loading stable coins: ' + error.message,
+        error_object: error
     });
 }
 
@@ -2004,8 +2030,18 @@ function errorSwapTooSmall(res, message)
     return res.send({
         error: true,
         code: 18,
-        min_swap_sats: config.swap.min_swap_sats,
+        min_swap_sats: config.swap.min_swap_value + ' ' + config.swap.min_swap_currency,
         message: 'Error swap too small: ' + message,
+    });
+}
+
+function errorUnloadStableCoins(res, error)
+{
+    return res.send({
+        error: true,
+        code: 19,
+        message: 'Error unloading stable coins: ' + error.message,
+        error_object: error
     });
 }
 

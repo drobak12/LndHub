@@ -1,14 +1,93 @@
 let http = require('http');
 let config = require('../../config');
+import { HttpUtils } from './Http';
 
 export class WalletMS
 {
 
-    constructor(){
+    constructor(redis){
+        this._redis = redis;
+        this._httpUtils = new HttpUtils();
     }
 
     async createAccount(userId){
+        if(!await this._getWalletId(userId)){
+            let walletId = await this._performCreateAccount(userId);
+            await this._saveWalletAccount(walletId);
+        }
+    }
+
+    async saveTransaction(walletId, userId, amount, currencyOrigin, currencyDestination, transactionId, transactionProviderId, fee){
         
+        let transactionUrl = config.wallet.transactionUrl.replace('{walletId}', walletId);
+        let options = {
+            headers: {
+                'x-consumer-custom-id': config.wallet.companyId,
+                'Content-Type': 'application/json'
+            },
+            hostname: config.wallet.hostname,
+            port: config.wallet.port,
+            path: transactionUrl,
+            method: 'POST'
+        }
+        let body = [
+            {
+                status:"confirmed",
+                amount: amount,
+                additional_info:{
+                    user_id: userId,
+                    currencyOrigin: currencyOrigin,
+                    currencyDestination: currencyDestination,
+                    txId: transactionId,
+                    txExternalId: transactionProviderId,
+                    fee: fee
+                }
+            }
+        ]
+
+        console.log('Request to WalletMS' + JSON.stringify(body));
+        let data = await this._httpUtils.doHttpPostRequest(options, body);
+        await this.verifyError(data);
+        return data.response[0];
+    }
+
+    async getBalance(walletId){
+        let balanceUrl = config.wallet.balanceUrl.replace('{walletId}', walletId);
+        let options = {
+            headers: {
+                'x-consumer-custom-id': config.wallet.companyId
+            },
+            hostname: config.wallet.hostname,
+            port: config.wallet.port,
+            path: balanceUrl,
+            method: 'GET'
+        }
+        
+        let data = await this._httpUtils.doHttpGetRequest(options);
+        await this.verifyError(data);
+        return data.response;
+    }
+
+    activity(){
+        return [
+            {
+                amount: 203,
+                timestamp: 1657053914
+            },
+            {
+                amount: 111,
+                timestamp: 1657053914
+            }
+        ]
+    }
+
+    async verifyError(data){
+        if(data.error){
+            throw {name : "WalletMSException", code: data.error_information.code, message : data.error_information.message}
+        }
+    }
+
+    async _performCreateAccount(userId){
         let options = {
             headers: {
                 'x-consumer-custom-id': config.wallet.companyId,
@@ -27,113 +106,18 @@ export class WalletMS
             }
         }
         
-        let data = await this.doPostRequest(options, body);
+        let data = await this._httpUtils.doHttpPostRequest(options, body);
         return data.response.id;
-        
     }
 
-    async saveTransaction(walletId, userId, amount){
-        
-        let transactionUrl = config.wallet.transactionUrl.replace('{walletId}', walletId);
-        let options = {
-            headers: {
-                'x-consumer-custom-id': config.wallet.companyId,
-                'Content-Type': 'application/json'
-            },
-            hostname: config.wallet.hostname,
-            port: config.wallet.port,
-            path: transactionUrl,
-            method: 'POST'
-        }
-        let body = [
-            {
-                status:"confirmed",
-                amount: amount,
-                additional_info:{
-                    user_id: userId
-                }
-            }
-        ]
-        let data = await this.doPostRequest(options, body);
-        return data.response[0];
+    async _saveWalletAccount(walletId){
+        if(!config.exchangeMs.mockEnable)
+            await this._redis.set('wallet_account_' + this._userid, new String(walletId));
     }
 
-    async getBalance(walletId){
-        let balanceUrl = config.wallet.balanceUrl.replace('{walletId}', walletId);
-        let options = {
-            headers: {
-                'x-consumer-custom-id': config.wallet.companyId
-            },
-            hostname: config.wallet.hostname,
-            port: config.wallet.port,
-            path: balanceUrl,
-            method: 'GET'
-        }
-        
-        let data = await this.doGetRequest(options);
-        return data.response;
-    }
-
-    activity(){
-        return [
-            {
-                amount: 203,
-                timestamp: 1657053914
-            },
-            {
-                amount: 111,
-                timestamp: 1657053914
-            }
-        ]
-    }
-
-    doPostRequest(options, data) {
-        return new Promise((resolve, reject) => {
-          const req = http.request(options, (res) => {
-            res.setEncoding('utf8');
-            let responseBody = '';
-      
-            res.on('data', (chunk) => {
-                responseBody += chunk;
-            });
-      
-            res.on('end', () => {
-                resolve(JSON.parse(responseBody));
-            });
-          });
-      
-          req.on('error', (err) => {
-            console.error('Error doPostRequest: ' + err);
-            reject(err);
-          });
-      
-          req.write(JSON.stringify(data));
-          req.end();
-        });
-    }
-
-    doGetRequest(options) {
-        return new Promise((resolve, reject) => {
-          const req = http.request(options, (res) => {
-            res.setEncoding('utf8');
-            let responseBody = '';
-      
-            res.on('data', (chunk) => {
-                responseBody += chunk;
-            });
-      
-            res.on('end', () => {
-                resolve(JSON.parse(responseBody));
-            });
-          });
-      
-          req.on('error', (err) => {
-            console.error('Error doGetRequest: ' + err);
-            reject(err);
-          });
-      
-          req.end();
-        });
+    async _getWalletId(userId){
+        let data = await this._redis.get('wallet_account_' + userId);
+        return parseInt(data);
     }
       
 }
