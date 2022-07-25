@@ -567,7 +567,9 @@ export class User
                     address: null,
                     time: invo.timestamp,
                     type: invo.type,
-                    description: invo.description
+                    description: invo.description,
+                    payer: invo.payer,
+                    payee: invo.payee
                 })
             }
         }
