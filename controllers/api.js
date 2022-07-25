@@ -995,7 +995,8 @@ router.get('/bill/process', async function (req, res)
                     fee: Math.ceil(info.num_satoshis * internalFee),
                     memo: decodeURIComponent(info.description),
                     pay_req: paymentRequest,
-                    payee: userid_payee
+                    payee: userid_payee,
+                    payer: u.getUserId()
                 });
 
                 const invoice = new Invo(redis, bitcoinclient, lightning);
