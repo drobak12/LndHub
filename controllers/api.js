@@ -554,6 +554,18 @@ router.post('/bill', postLimiter, async function (req, res)
     }
 });
 
+router.get('/wallet/stablecoin/limits', postLimiter, async function (req, res)
+{
+    let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+    res.send(
+        { 
+            min_swap_sats: amountInSatsMinSwap,
+            min_swap_value: config.swap.min_swap_value,
+            min_swap_currency: config.swap.min_swap_currency,
+        }
+    );
+});
+
 router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
 {
     let u = new User(redis, bitcoinclient, lightning);
@@ -983,6 +995,7 @@ router.get('/bill/process', async function (req, res)
                     fee: Math.ceil(info.num_satoshis * internalFee),
                     memo: decodeURIComponent(info.description),
                     pay_req: paymentRequest,
+                    payee: userid_payee
                 });
 
                 const invoice = new Invo(redis, bitcoinclient, lightning);
