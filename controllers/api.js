@@ -1342,6 +1342,8 @@ router.post('/v2/payinvoice', async function (req, res)
                     fee: fees_to_pay,
                     memo: decodeURIComponent(info.description),
                     pay_req: req.body.invoice,
+                    payer: u.getUserId(),
+                    payee: userid_payee
                 });
 
                 const invoice = new Invo(redis, bitcoinclient, lightning);
