@@ -901,6 +901,7 @@ router.get('/bill/process', async function (req, res)
 
     if (!req.query.k1) return errorBadArguments(res);
     if (!req.query.pr) return errorBadArguments(res);
+    
 
     let token = req.query.k1;
     let paymentRequest = req.query.pr;
@@ -1222,6 +1223,19 @@ router.post('/addinvoice', postLimiter, async function (req, res)
     if (req.body.currency)
         currency = req.body.currency;
     let amount = Math.round(await convertAmountToSatoshis(req.body.amt,currency));
+    let billToken = req.body.bill_token;
+    let bill;
+    if(billToken){
+        bill = await u.getBill(billToken);
+        if (!bill)
+        {
+            return errorBadAuth(res);
+        }
+    }else{
+        bill = {
+            created_by: ''
+        }
+    }
 
     if (config.sunset) return errorSunsetAddInvoice(res);
 
@@ -1234,6 +1248,7 @@ router.post('/addinvoice', postLimiter, async function (req, res)
             if (err) return errorLnd(res);
 
             info.pay_req = info.payment_request; // client backwards compatibility
+            info.payer = bill.created_by;
             await u.saveUserInvoice(info);
             await invoice.savePreimage(r_preimage);
 
