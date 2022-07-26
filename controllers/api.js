@@ -735,7 +735,7 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
 async function checkMasterAccount()
 {
     logger.log('Checking master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency);
-    if(!await redis.get('wallet_account_' + config.wallet.masterAccount)){
+    if(!await redis.get('wallet_account_' + config.wallet.masterAccount && !config.exchangeMs.mockEnable)){
         logger.log('Creating master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency);
         let walletMS = new WalletMS();
         let walletId = await walletMS.createAccount(config.wallet.masterAccount);
