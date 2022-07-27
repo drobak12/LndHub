@@ -737,7 +737,6 @@ async function checkMasterAccount()
     logger.log('Checking master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency, ['Initial configuration']);
     let walletMS = new WalletMS(redis);
     let walletId = await walletMS._getWalletIdString(config.wallet.masterAccount);
-    console.log('::' + walletId);
     if(!walletId){
         logger.log('Creating master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency, ['Initial configuration']);
         
