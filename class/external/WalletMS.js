@@ -11,10 +11,12 @@ export class WalletMS
     }
 
     async createAccount(userId){
-        if(!await this._getWalletId(userId)){
+        let walletId = await this._getWalletId(userId);
+        if(!walletId){
             let walletId = await this._performCreateAccount(userId);
             await this._saveWalletAccount(walletId);
         }
+        return walletId;
     }
 
     async saveTransaction(walletId, userId, amount, currencyOrigin, currencyDestination, transactionId, transactionProviderId, fee){
