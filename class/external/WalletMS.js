@@ -111,13 +111,16 @@ export class WalletMS
     }
 
     async _saveWalletAccount(walletId){
-        if(!config.exchangeMs.mockEnable)
-            await this._redis.set('wallet_account_' + this._userid, new String(walletId));
+        await this._redis.set('wallet_account_' + this._userid, new String(walletId));    
     }
 
     async _getWalletId(userId){
         let data = await this._redis.get('wallet_account_' + userId);
         return parseInt(data);
+    }
+
+    async _getWalletIdString(userId){
+        return await this._redis.get('wallet_account_' + userId);
     }
       
 }
