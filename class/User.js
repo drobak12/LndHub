@@ -173,7 +173,7 @@ export class User
                 created_by: this.getUserId(),
                 currency: currency,
                 amountInSats: amountInSats,
-                expiration: timestamp + 86400
+                expiration: timestamp + config.billExpiration
             }
 
             this.saveBill(token, bill);

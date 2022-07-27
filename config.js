@@ -57,7 +57,8 @@ let config = {
     swapQuoteExecutionUrl: '/api/v1/swap-quotes/{swap_quote_id}/actions/execute/',
     loadBalanceUrl: '/api/v1/end-users/{user-id}/load/',
     withdrawUrl: '/api/v1/withdrawals/'
-  }
+  },
+  billExpiration: 86400
 };
 
 if (process.env.CONFIG) {
