@@ -736,13 +736,13 @@ async function checkMasterAccount()
 {
     logger.log('Checking master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency, ['Initial configuration']);
     let walletMS = new WalletMS(redis);
-    let walletId = await this.walletMS._getWalletIdString(config.wallet.masterAccount);
+    let walletId = await walletMS._getWalletIdString(config.wallet.masterAccount);
     console.log('::' + walletId);
     if(!walletId){
         logger.log('Creating master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency, ['Initial configuration']);
         
         await walletMS.createAccount(config.wallet.masterAccount);
-        walletId = await this._getWalletIdString(config.wallet.masterAccount);
+        walletId = await walletMS._getWalletIdString(config.wallet.masterAccount);
         logger.log('Saving walletId for Master Account: ' + new String(walletId), ['Initial configuration']);
         redis.set('wallet_account_' + config.wallet.masterAccount, new String(walletId));
     }else {
