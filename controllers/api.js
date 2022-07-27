@@ -768,6 +768,10 @@ async function updateConvertRatios()
                 break;
             }
             let ratio = apiResponse.body['BTC_' + currency];
+            if(!ratio || ratio.length < 1){
+                logger.error('api.updateConvertRatios', [ 'Empty ratio' + currency ]);
+                continue;
+            }
             //console.log('updating currency ratio:' + currency + '=' + ratio);
 
             let key = 'convert_ratio_BTC_' + currency;
@@ -804,6 +808,7 @@ checkMasterAccount();
 updateConvertRatios();
 setInterval(updateConvertRatios, config.currencyConvert.updateIntervalMillis);
 
+//TODO: Move to Exchange JS
 async function getConvertRatioToSatoshis(currency)
 {
     if ("SATS" == currency)
@@ -820,8 +825,7 @@ async function getConvertRatioToSatoshis(currency)
     if (!convertRatio)
     {
         logger.error('Error in getConvertRatioToSatoshis', [currency]);
-        //TODO!!!
-        return 1;
+        throw 'getConvertRatioToSatoshis:: Ratio is not defined'; 
     }
     return 100000000.0 / convertRatio;
 

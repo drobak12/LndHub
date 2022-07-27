@@ -73,8 +73,7 @@ export class Exchange
         if (!convertRatio)
         {
             logger.error('Error in getConvertRatioToSatoshis', [currency]);
-            //TODO!!!
-            return 1;
+            throw 'Exchange::getConvertRatioToSatoshis:: Ratio is not defined'; 
         }
         return 100000000.0 / convertRatio;
 
