@@ -743,7 +743,7 @@ async function checkMasterAccount()
         
         await walletMS.createAccount(config.wallet.masterAccount);
         let walletIdCreate = await walletMS._getWalletId(config.wallet.masterAccount);
-        logger.log('Saving walletId for Master Account: ' + new String(walletId), ['Initial configuration']);
+        logger.log('Saving walletId for Master Account: ' + new String(walletIdCreate), ['Initial configuration']);
         redis.set('wallet_account_' + config.wallet.masterAccount, new String(walletIdCreate));
     }else {
         logger.log('Already account exists:: ID: '+ walletId + '. wallet_account_' + config.wallet.masterAccount, ['Initial configuration']);
