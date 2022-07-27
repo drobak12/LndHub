@@ -742,9 +742,9 @@ async function checkMasterAccount()
         logger.log('Creating master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency, ['Initial configuration']);
         
         await walletMS.createAccount(config.wallet.masterAccount);
-        walletId = await walletMS._getWalletIdString(config.wallet.masterAccount);
+        walletIdCreate = await walletMS._getWalletId(config.wallet.masterAccount);
         logger.log('Saving walletId for Master Account: ' + new String(walletId), ['Initial configuration']);
-        redis.set('wallet_account_' + config.wallet.masterAccount, new String(walletId));
+        redis.set('wallet_account_' + config.wallet.masterAccount, new String(walletIdCreate));
     }else {
         logger.log('Already account exists:: ID: '+ walletId + '. wallet_account_' + config.wallet.masterAccount, ['Initial configuration']);
     }
