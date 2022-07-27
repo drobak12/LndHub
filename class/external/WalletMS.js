@@ -13,7 +13,7 @@ export class WalletMS
     async createAccount(userId){
         if(!await this._getWalletId(userId)){
             let walletId = await this._performCreateAccount(userId);
-            await this._saveWalletAccount(walletId);
+            await this._saveWalletAccount(userId, walletId);
         }
     }
 
@@ -110,8 +110,8 @@ export class WalletMS
         return data.response.id;
     }
 
-    async _saveWalletAccount(walletId){
-        await this._redis.set('wallet_account_' + this._userid, new String(walletId));    
+    async _saveWalletAccount(userId, walletId){
+        await this._redis.set('wallet_account_' + userId, new String(walletId));    
     }
 
     async _getWalletId(userId){
