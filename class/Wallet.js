@@ -21,10 +21,8 @@ export class Wallet
 
     _createInstanceExchange(redis){
         if(config.exchangeMs.mockEnable){
-            logger.log('Creating MockMS instance for Exchange Service', [])
             return new MockMS(redis);
         }else {
-            logger.log('Creating RipioMS instance for Exchange Service', [])
             return new RipioMS(redis);
         }
     }
