@@ -1,4 +1,5 @@
-import { User, Lock, Paym, Invo, Totp } from '../class/';
+import { User, Lock, Paym, Invo, Totp, Wallet } from '../class/';
+import { WalletMS } from '../class/external/WalletMS';
 const lnurl = require('lnurl');
 import Frisbee from 'frisbee';
 import { stringify } from 'uuid';
@@ -86,9 +87,10 @@ redis.info(function (err, info)
 
 const InvoicesStreamCallback = async function (response)
 {
-    logger.log('api.InvoicesStreamCallback', [JSON.stringify(response)]);
-    if (response.state !== 'SETTLED')
+    if (response.state !== 'SETTLED'){
+        logger.log('api.InvoicesStreamCallback', [JSON.stringify(response)]);
         return;
+    }
 
     const LightningInvoiceSettledNotification = {
         memo: response.memo,
@@ -112,7 +114,7 @@ const InvoicesStreamCallback = async function (response)
     const user = new User(redis, bitcoinclient, lightning);
     user._userid = await user.getUseridByPaymentHash(LightningInvoiceSettledNotification.hash);
     await user.clearBalanceCache();
-    logger.log('api.InvoicesStreamCallback', [user._userid, LightningInvoiceSettledNotification.hash]);
+    logger.log('api.InvoicesStreamCallback', [user._userid, LightningInvoiceSettledNotification.hash, JSON.stringify(response)]);
 
 
     if (!response.type)
@@ -133,6 +135,7 @@ const InvoicesStreamCallback = async function (response)
             total_amount: LightningInvoiceSettledNotification.amt_paid_sat,
             time: Math.trunc(new Date().getTime() / 1000),
             payer: response.payer,
+            payee: response.payee,
             type: response.type,
             bill_amount: response.bill.amount,
             bill_currency: response.bill.currency
@@ -510,26 +513,246 @@ router.post('/bill', postLimiter, async function (req, res)
 
     let amountInSats = await convertAmountToSatoshis(amount, currency);
 
+    logger.log('User.createBill', [req.id, u.getUserId(), amount, currency, amountInSats]);
+    let lock = new Lock(redis, 'creating_bill_for' + u.getUserId());
+    if (!(await lock.obtainLock()))
+    {
+        return errorLockUser(res);
+    }
+
     try
     {
-        let host = config.callbackHost;
+        let userBalance;
+        try
+        {
+            await u.clearBalanceCache();
+            userBalance = await u.getCalculatedBalance();
+        } catch (Error)
+        {
+            logger.log('User.createBill', [req.id, 'error running getCalculatedBalance():', Error.message]);
+            lock.releaseLock();
+            return errorTryAgainLater(res);
+        }
+        logger.log('User.createBill', [req.id, 'Balance: ' + userBalance]);
+
+        // Check balance
+        console.log('userBalance::' + userBalance +'-'+'amountInSats:: ' + amountInSats +'fee::' + Math.ceil(amountInSats * forwardFee))
+        if (!(userBalance >= +amountInSats + Math.ceil(amountInSats * internalFee)))
+        {
+            await lock.releaseLock();
+            return errorNotEnougBalance(res);
+        }
+
         let bill = await u.createBill(req.id, amount, currency, amountInSats);
-        let callbackUrl = host + config.billUrl + "?token=" + bill.token;
-
-        const encoded = bill.token;//lnurl.encode(callbackUrl);    
-
-        res.send({ bill: bill, bill_request: encoded });
+        lock.releaseLock();
+        return res.send({ bill: bill, bill_request: bill.token });
     } catch (Error)
     {
         logger.log('', [req.id, 'error creating bill:', Error.message]);
+        lock.releaseLock();
         return errorSendCoins(res, Error);
     }
 });
 
+router.get('/wallet/stablecoin/limits', postLimiter, async function (req, res)
+{
+    let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+    res.send(
+        { 
+            min_swap_sats: amountInSatsMinSwap,
+            min_swap_value: config.swap.min_swap_value,
+            min_swap_currency: config.swap.min_swap_currency,
+        }
+    );
+});
+
+router.post('/wallet/stablecoin/load', postLimiter, async function (req, res)
+{
+    let u = new User(redis, bitcoinclient, lightning);
+    if (!(await u.loadByAuthorization(req.headers.authorization)))
+    {
+        return errorBadAuth(res);
+    }
+    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+
+
+    let lock = new Lock(redis, 'load_stablecoin' + u.getUserId());
+    if (!(await lock.obtainLock()))
+    {
+        return;
+    }
+
+    logger.log('/wallet/stablecoin/load (post)', [req.id, u.getUserId()]);
+    let amount = req.body.amount;
+    let currency = req.body.currency;
+    if (!currency)
+        currency = "SATS";
+    
+    try
+    {
+        let amountInSats = await convertAmountToSatoshis(amount, currency);
+        amountInSats = Math.round(amountInSats);
+        let fee = Math.floor(0); //TODO: calculate fee;
+
+        let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+        if (amountInSats < amountInSatsMinSwap)
+        {
+            await lock.releaseLock();
+            return errorSwapTooSmall(res, amountInSatsMinSwap );
+        }
+
+        let userBalance = await u.getBalance();
+
+        if (!(userBalance >= amountInSats + fee))
+        {
+            await lock.releaseLock();
+            return errorNotEnougBalance(res);
+        }
+        
+        let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
+        await wallet.loadAccount();
+        let walletTransaction = await wallet.loadBalanceAmountToWallet(amountInSats, req.id);
+        
+        await u.saveSwapTx({
+            timestamp: parseInt(+new Date() / 1000),
+            type: 'stablecoin',
+            amount: -(amountInSats + fee),
+            fee: fee,
+            txid: walletTransaction.id,
+            description: 'Swap to USDC: ' + amountInSats + ' SATS'
+        });
+
+        await u.clearBalanceCache();
+        await lock.releaseLock();
+        res.send(
+            { 
+                type:"load",
+                txid: walletTransaction.id,
+                timestamp: parseInt(+new Date() / 1000),
+                exchange_amount: amountInSats+fee,
+                fee: fee,
+                input: {
+                    amount: amount,
+                    currency: currency
+                }, 
+                output: {
+                    amount: walletTransaction.amount, 
+                    currency: await wallet.getCurrency()
+                }
+            }
+        );
+    } catch (Error)
+    {
+        await lock.releaseLock();
+        logger.error('', [req.id, 'error loading stablecoin:', Error.message]);
+        return errorLoadStableCoins(res, Error);
+    }
+});
+
+router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res)
+{
+    let u = new User(redis, bitcoinclient, lightning);
+    if (!(await u.loadByAuthorization(req.headers.authorization)))
+    {
+        return errorBadAuth(res);
+    }
+    if (!req.body.amount || /*stupid NaN*/ !(req.body.amount > 0)) return errorBadArguments(res);
+
+    let lock = new Lock(redis, 'unload_stablecoin' + u.getUserId());
+    if (!(await lock.obtainLock()))
+    {
+        return;
+    }
+
+    logger.log('/wallet/stablecoin/unload (post)', [req.id, u.getUserId()]);
+
+
+    let amount = req.body.amount;
+    let currency = req.body.currency;
+    if (!currency)
+        currency = "SATS";
+    
+    try
+    {
+        let amountInSats = await convertAmountToSatoshis(amount, currency);
+        amountInSats = Math.round(amountInSats);
+
+        let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+        if (amountInSats < amountInSatsMinSwap)
+        {
+            await lock.releaseLock();
+            return errorSwapTooSmall(res, amountInSatsMinSwap );
+        }
+        
+        let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
+        await wallet.loadAccount();
+        let walletBalanceSats = await wallet.getBalanceInSats();
+        
+        if (!(walletBalanceSats >= amountInSats))
+        {
+            await lock.releaseLock();
+            return errorNotEnougBalance(res);
+        }
+
+        let walletTransaction = await wallet.loadStableCoinToBalance(amountInSats, req.id);
+        let fee = Math.floor(0); //TODO: calculate fee: walletTransaction.fee
+
+        await u.saveSwapTx({
+            timestamp: parseInt(+new Date() / 1000),
+            type: 'stablecoin',
+            amount:  walletTransaction.amountSats - fee,
+            fee: fee,
+            txid: walletTransaction.id,
+            description: 'Swap from USDC: ' + walletTransaction.amountSats + ' SATS'
+        });
+        
+        await lock.releaseLock();
+        res.send(
+            { 
+                type: "unload",
+                txid: walletTransaction.id,
+                timestamp: parseInt(+new Date() / 1000),
+                exchange_amount: walletTransaction.amount ,
+                fee: fee,
+                input: {
+                    amount: amount,
+                    currency: currency
+                }, 
+                output: {
+                    amount: walletTransaction.amountSats - fee, 
+                    currency: 'SATS'
+                }
+            }
+        );
+    } catch (Error)
+    {
+        await lock.releaseLock();
+        logger.error('', [req.id, 'error unloading stablecoin:', Error]);
+        return errorUnloadStableCoins(res, Error);
+    }
+});
+
+async function checkMasterAccount()
+{
+    logger.log('Checking master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency, ['Initial configuration']);
+    let walletMS = new WalletMS(redis);
+    let walletId = await walletMS._getWalletIdString(config.wallet.masterAccount);
+    if(!walletId){
+        logger.log('Creating master account in WalletMS::' + config.wallet.masterAccount + '-' + config.wallet.masterAccountCurrency, ['Initial configuration']);
+        
+        await walletMS.createAccount(config.wallet.masterAccount);
+        let walletIdCreate = await walletMS._getWalletId(config.wallet.masterAccount);
+        logger.log('Saving walletId for Master Account: ' + new String(walletIdCreate), ['Initial configuration']);
+        redis.set('wallet_account_' + config.wallet.masterAccount, new String(walletIdCreate));
+    }else {
+        logger.log('Already account exists:: ID: '+ walletId + '. wallet_account_' + config.wallet.masterAccount, ['Initial configuration']);
+    }
+}
 
 async function updateConvertRatios()
 {
     let currencies = config.currencyConvert.currencies;
+    //console.log('api.updateConvertRatios:' + JSON.stringify(currencies));
     for (var i = 0; i < currencies.length; i++)
     {
         let currency = currencies[i];
@@ -539,23 +762,40 @@ async function updateConvertRatios()
         {
             let url = config.currencyConvert.url + currency;
             const apiResponse = await new Frisbee().get(url); //{"BTC_USD":19474.1778}
+            if (!apiResponse || !apiResponse.body)
+            {
+                logger.error('api.updateConvertRatios', ['error updating currency ' + currency + ': bad response from server']);
+                break;
+            }
             let ratio = apiResponse.body['BTC_' + currency];
-
+            if(!ratio || ratio.length < 1){
+                logger.error('api.updateConvertRatios', [ 'Empty ratio' + currency ]);
+                continue;
+            }
             //console.log('updating currency ratio:' + currency + '=' + ratio);
 
             let key = 'convert_ratio_BTC_' + currency;
             await redis.set(key, ratio);
+            
+            let urlToBtc = config.currencyConvert.urlCurrencyToBtc.replace('{currency}', currency);
+            const apiResponseInvert = await new Frisbee().get(urlToBtc); //{"USD_BTC":0.000050267979}
+            let ratioInvert = apiResponseInvert.body[currency + '_BTC'];
+
+            let keyInvert = 'convert_ratio_' + currency + '_BTC';
+            await redis.set(keyInvert, ratioInvert);
 
             if (currency==="USD")
             {
                 currency = "USDC"
                 let key = 'convert_ratio_BTC_' + currency;
+                let keyInvert = 'convert_ratio_' + currency + '_BTC';
                 await redis.set(key, ratio);
+                await redis.set(keyInvert, ratioInvert);
             }
 
         } catch (Error)
         {
-            logger.log('api.updateConvertRatios', [
+            logger.error('api.updateConvertRatios', [
                 'error updating currency ' + currency + ':',
                 Error.message,
             ]);
@@ -564,9 +804,11 @@ async function updateConvertRatios()
     //console.log('updateConvertRatios: END');
 }
 
+checkMasterAccount();
 updateConvertRatios();
 setInterval(updateConvertRatios, config.currencyConvert.updateIntervalMillis);
 
+//TODO: Move to Exchange JS
 async function getConvertRatioToSatoshis(currency)
 {
     if ("SATS" == currency)
@@ -583,8 +825,7 @@ async function getConvertRatioToSatoshis(currency)
     if (!convertRatio)
     {
         logger.error('Error in getConvertRatioToSatoshis', [currency]);
-        //TODO!!!
-        return 1;
+        throw 'getConvertRatioToSatoshis:: Ratio is not defined'; 
     }
     return 100000000.0 / convertRatio;
 
@@ -669,6 +910,7 @@ router.get('/bill/process', async function (req, res)
 
     if (!req.query.k1) return errorBadArguments(res);
     if (!req.query.pr) return errorBadArguments(res);
+    
 
     let token = req.query.k1;
     let paymentRequest = req.query.pr;
@@ -728,7 +970,7 @@ router.get('/bill/process', async function (req, res)
             info.num_satoshis = freeAmount;
         }
 
-        if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1)
+        if (userBalance >= +info.num_satoshis + Math.ceil(info.num_satoshis * internalFee))
         {
             // got enough balance, including 1% of payment amount - reserve for fees
 
@@ -759,10 +1001,12 @@ router.get('/bill/process', async function (req, res)
                 await u.savePaidLndInvoice({
                     timestamp: parseInt(+new Date() / 1000),
                     type: 'paid_invoice',
-                    value: +info.num_satoshis + Math.floor(info.num_satoshis * internalFee),
-                    fee: Math.floor(info.num_satoshis * internalFee),
+                    value: +info.num_satoshis + Math.ceil(info.num_satoshis * internalFee),
+                    fee: Math.ceil(info.num_satoshis * internalFee),
                     memo: decodeURIComponent(info.description),
                     pay_req: paymentRequest,
+                    payee: userid_payee,
+                    payer: u.getUserId()
                 });
 
                 const invoice = new Invo(redis, bitcoinclient, lightning);
@@ -781,6 +1025,7 @@ router.get('/bill/process', async function (req, res)
                         amt_paid_sat: +info.num_satoshis,
                         type: 'bill_pay',
                         payer: u.getUserId(),
+                        payee: userid_payee,
                         bill: bill
                     });
                 }
@@ -826,7 +1071,7 @@ router.get('/bill/process', async function (req, res)
             let inv = {
                 payment_request: paymentRequest,
                 amt: info.num_satoshis, // amt is used only for 'tip' invoices
-                fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
+                fee_limit: { fixed: Math.ceil(info.num_satoshis * forwardFee) },
             };
             try
             {
@@ -982,18 +1227,37 @@ router.post('/addinvoice', postLimiter, async function (req, res)
     logger.log('/addinvoice', [req.id, u.getUserId()]);
 
     if (!req.body.amt || /*stupid NaN*/ !(req.body.amt > 0)) return errorBadArguments(res);
+    
+    let currency = Currency.SATS;
+    if (req.body.currency)
+        currency = req.body.currency;
+    let amount = Math.round(await convertAmountToSatoshis(req.body.amt,currency));
+    let billToken = req.body.bill_token;
+    let bill;
+    if(billToken){
+        bill = await u.getBill(billToken);
+        if (!bill)
+        {
+            return errorBadAuth(res);
+        }
+    }else{
+        bill = {
+            created_by: ''
+        }
+    }
 
     if (config.sunset) return errorSunsetAddInvoice(res);
 
     const invoice = new Invo(redis, bitcoinclient, lightning);
     const r_preimage = invoice.makePreimageHex();
     lightning.addInvoice(
-        { memo: req.body.memo, value: req.body.amt, expiry: 3600 * 24, r_preimage: Buffer.from(r_preimage, 'hex').toString('base64') },
+        { memo: req.body.memo, value: amount, expiry: 3600 * 24, r_preimage: Buffer.from(r_preimage, 'hex').toString('base64') },
         async function (err, info)
         {
             if (err) return errorLnd(res);
 
             info.pay_req = info.payment_request; // client backwards compatibility
+            info.payer = bill.created_by;
             await u.saveUserInvoice(info);
             await invoice.savePreimage(r_preimage);
 
@@ -1054,7 +1318,7 @@ router.post('/v2/payinvoice', async function (req, res)
 
         logger.log('/v2/payinvoice', [req.id, u.getUserId(), 'userBalance: ' + userBalance, 'num_satoshis: ' + info.num_satoshis]);
 
-        if (userBalance >= +info.num_satoshis + Math.floor(info.num_satoshis * forwardFee) + 1)
+        if (userBalance >= +info.num_satoshis + Math.ceil(info.num_satoshis * forwardFee))
         {
             // got enough balance, including 1% of payment amount - reserve for fees
 
@@ -1093,7 +1357,7 @@ router.post('/v2/payinvoice', async function (req, res)
                 UserPayee._userid = userid_payee; // hacky, fixme
                 await UserPayee.clearBalanceCache();
 
-                let fees_to_pay = Math.floor(info.num_satoshis * internalFee);
+                let fees_to_pay = Math.ceil(info.num_satoshis * internalFee);
                 // sender spent his balance:
                 await u.clearBalanceCache();
                 await u.savePaidLndInvoice({
@@ -1103,6 +1367,8 @@ router.post('/v2/payinvoice', async function (req, res)
                     fee: fees_to_pay,
                     memo: decodeURIComponent(info.description),
                     pay_req: req.body.invoice,
+                    payer: u.getUserId(),
+                    payee: userid_payee
                 });
 
                 const invoice = new Invo(redis, bitcoinclient, lightning);
@@ -1141,7 +1407,7 @@ router.post('/v2/payinvoice', async function (req, res)
             let inv = {
                 payment_request: req.body.invoice,
                 amt: info.num_satoshis, // amt is used only for 'tip' invoices
-                fee_limit: { fixed: Math.floor(info.num_satoshis * forwardFee) + 1 },
+                fee_limit: { fixed: Math.ceil(info.num_satoshis * forwardFee) },
             };
             try
             {
@@ -1221,7 +1487,7 @@ router.post('/payinvoice', async function (req, res)
         return errorTryAgainLater(res);
     }
 
-    lightning.decodePayReq({ pay_req: req.body.invoice }, async function (err, info)
+    lightning.decodePa/yReq({ pay_req: req.body.invoice }, async function (err, info)
     {
         if (err)
         {
@@ -1413,13 +1679,19 @@ router.get('/balance', postLimiter, async function (req, res)
         logger.log('/balance', [req.id, u.getUserId()]);
 
         if (!(await u.getAddress())) await u.generateAddress(); // onchain address needed further
+        
         await u.accountForPosibleTxids();
+        
+        let wallet = new Wallet(u.getUserId(), Currency.USDC, redis);
+        await wallet.loadAccount();
+        let stableCoinBalance = await wallet.getBalance();
         let balance = await u.getBalance();
+
         if (balance < 0) balance = 0;
-        res.send({ BTC: { AvailableBalance: balance } });
+        res.send({ BTC: { AvailableBalance: balance }, USDC: { AvailableBalance:stableCoinBalance } });
     } catch (Error)
     {
-        logger.log('', [req.id, 'error getting balance:', Error, 'userid:', u.getUserId()]);
+        logger.log(Error, [req.id, 'error getting balance:', Error, 'userid:', u.getUserId()]);
         return errorGeneralServerError(res);
     }
 });
@@ -1779,4 +2051,43 @@ function errorLndEstimateFee(res, message)
         code: 16,
         message: 'LND failue: ' + message,
     });
+}
+
+function errorLoadStableCoins(res, error)
+{
+    return res.send({
+        error: true,
+        code: 17,
+        message: 'Error loading stable coins: ' + error.message,
+        error_object: error
+    });
+}
+
+
+function errorSwapTooSmall(res, message)
+{
+    return res.send({
+        error: true,
+        code: 18,
+        min_swap_sats: message,
+        min_swap: config.swap.min_swap_value + ' ' + config.swap.min_swap_currency, 
+        message: 'Error swap too small: ' + message,
+    });
+}
+
+function errorUnloadStableCoins(res, error)
+{
+    return res.send({
+        error: true,
+        code: 19,
+        message: 'Error unloading stable coins: ' + error.message,
+        error_object: error
+    });
+}
+
+const Currency = {
+    BTC: 'BTC',
+    SATS: 'SATS',
+    USDT: 'USDT',
+    USDC: 'USDC'
 }

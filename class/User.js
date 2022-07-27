@@ -158,34 +158,6 @@ export class User
 
     async createBill(requestId, amount, currency, amountInSats)
     {
-        logger.log('User.createBill', [requestId, this.getUserId(), amount, currency, amountInSats]);
-
-        let lock = new Lock(this._redis, 'creating_bill_for' + this.getUserId());
-        if (!(await lock.obtainLock()))
-        {
-            return errorLockUser(res);
-        }
-
-        let userBalance;
-        try
-        {
-            await this.clearBalanceCache();
-            userBalance = await this.getCalculatedBalance();
-        } catch (Error)
-        {
-            logger.log('User.createBill', [requestId, 'error running getCalculatedBalance():', Error.message]);
-            lock.releaseLock();
-            return errorTryAgainLater(res);
-        }
-        logger.log('User.createBill', [requestId, 'Balance: ' + userBalance]);
-
-        // Check balance
-        if (!(userBalance >= +amountInSats + Math.floor(amountInSats * forwardFee) + 1))
-        {
-            await lock.releaseLock();
-            return errorNotEnougBalance(res);
-        }
-
         // Generate Bill
         try
         {
@@ -196,6 +168,7 @@ export class User
             let bill = {
                 token: token,
                 amount: amount,
+                requestId: requestId, 
                 timestamp: timestamp,
                 created_by: this.getUserId(),
                 currency: currency,
@@ -205,12 +178,12 @@ export class User
 
             this.saveBill(token, bill);
             delete bill.created_by;
-            lock.releaseLock();
+            delete bill.requestId;
+            
             return bill;
         } catch (Error)
         {
-            logger.log('User.createBill', [requestId, 'error saving bill:', Error.message]);
-            lock.releaseLock();
+            logger.error('User.createBill', [requestId, 'error saving bill:', Error.message]);
             return errorTryAgainLater(res);
         }
 
@@ -308,6 +281,13 @@ export class User
     async getCalculatedBalance()
     {
         let calculatedBalance = 0;
+
+        let swapTxs = await this.getSwapTx();
+        for(let swapTx of swapTxs){
+            let swapTxData = JSON.parse(swapTx);
+            calculatedBalance += swapTxData.amount;
+        }
+        
         let userinvoices = await this.getUserInvoices();
 
         for (let invo of userinvoices)
@@ -325,7 +305,7 @@ export class User
             {
                 // topup
                 calculatedBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
-            } else if (tx.type === 'user_invoice')
+            } else if (tx.type === 'user_invoice' || tx.type === 'stablecoin')
             {
 
             }
@@ -376,6 +356,16 @@ export class User
     async saveSendCoinsTx(doc)
     {
         return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
+    }
+
+    async saveSwapTx(swap)
+    {
+        return await this._redis.rpush('swap_txs_for_' + this._userid, JSON.stringify(swap));
+    }
+
+    async getSwapTx()
+    {
+        return await this._redis.lrange('swap_txs_for_' + this._userid, 0, -1);
     }
 
     async saveBill(token, bill)
@@ -577,17 +567,26 @@ export class User
                     address: null,
                     time: invo.timestamp,
                     type: invo.type,
-                    description: invo.description
+                    description: invo.description,
+                    payer: invo.payer,
+                    payee: invo.payee
                 })
             }
         }
         // finaliza prueba
-
+        
+        // SWAP Transactions
+        let swapTxs = await this.getSwapTx();
+        for(let swapTx of swapTxs){
+            result.push(JSON.parse(swapTx));
+        }
+        // END SWAP Transactions
+        
         let range = await this._redis.lrange('txs_for_' + this._userid, 0, -1);
         for (let invoice of range)
         {
             invoice = JSON.parse(invoice);
-            if (invoice.type === "sendcoins")
+            if (invoice.type === "sendcoins" || invoice.type === "stablecoin")
             {
 
             } else
