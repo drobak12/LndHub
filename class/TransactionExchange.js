@@ -1,6 +1,4 @@
-
 export default class TransactionExchange {
-  
   constructor(transactionProviderId, transactionId, transactionAmount, currencyOrigin, currencyDestionation, amountExchange, fee, rate) {
     this._transactionProviderId = transactionProviderId;
     this._transactionId = transactionId;
@@ -11,5 +9,4 @@ export default class TransactionExchange {
     this._fee = fee;
     this._rate = rate;
   }
-
 }

@@ -14,590 +14,497 @@ let _invoice_ispaid_cache = {};
 let _listtransactions_cache = false;
 let _listtransactions_cache_expiry_ts = 0;
 
-export class User
-{
-    /**
-     *
-     * @param {Redis} redis
-     */
-    constructor(redis, bitcoindrpc, lightning)
-    {
-        this._redis = redis;
-        this._bitcoindrpc = bitcoindrpc;
-        this._lightning = lightning;
-        this._userid = false;
-        this._login = false;
-        this._password = false;
-        this._balance = 0;
+export class User {
+  /**
+   *
+   * @param {Redis} redis
+   */
+  constructor(redis, bitcoindrpc, lightning) {
+    this._redis = redis;
+    this._bitcoindrpc = bitcoindrpc;
+    this._lightning = lightning;
+    this._userid = false;
+    this._login = false;
+    this._password = false;
+    this._balance = 0;
+  }
+
+  getUserId() {
+    return this._userid;
+  }
+
+  getLogin() {
+    return this._login;
+  }
+  getPassword() {
+    return this._password;
+  }
+  getAccessToken() {
+    return this._acess_token;
+  }
+  getRefreshToken() {
+    return this._refresh_token;
+  }
+
+  async loadByAuthorization(authorization) {
+    if (!authorization) return false;
+    //let access_token = authorization.replace('Bearer ', '');
+    let userid = authorization; //await this._redis.get('userid_for_' + access_token);
+
+    if (userid) {
+      this._userid = userid;
+      return true;
     }
 
-    getUserId()
-    {
-        return this._userid;
+    return false;
+  }
+
+  async loadByRefreshToken(refresh_token) {
+    let userid = await this._redis.get('userid_for_' + refresh_token);
+    if (userid) {
+      this._userid = userid;
+      await this._generateTokens();
+      return true;
     }
 
-    getLogin()
-    {
-        return this._login;
+    return false;
+  }
+
+  async create(userid) {
+    let buffer = crypto.randomBytes(10);
+    let login = buffer.toString('hex');
+
+    buffer = crypto.randomBytes(10);
+    let password = buffer.toString('hex');
+
+    //buffer = crypto.randomBytes(24);
+    //let userid = buffer.toString('hex');
+    this._login = login;
+    this._password = password;
+    this._userid = userid;
+    await this._saveUserToDatabase();
+  }
+
+  async saveMetadata(metadata) {
+    return await this._redis.set('metadata_for_' + this._userid, JSON.stringify(metadata));
+  }
+
+  async loadByLoginAndPassword(login, password) {
+    let userid = await this._redis.get('user_' + login + '_' + this._hash(password));
+
+    if (userid) {
+      this._userid = userid;
+      this._login = login;
+      this._password = password;
+      await this._generateTokens();
+      return true;
     }
-    getPassword()
-    {
-        return this._password;
-    }
-    getAccessToken()
-    {
-        return this._acess_token;
-    }
-    getRefreshToken()
-    {
-        return this._refresh_token;
+    return false;
+  }
+
+  async getAddress() {
+    return await this._redis.get('bitcoin_address_for_' + this._userid);
+  }
+
+  /**
+   * Asks LND for new address, and imports it to bitcoind
+   *
+   * @returns {Promise<any>}
+   */
+  async generateAddress() {
+    let lock = new Lock(this._redis, 'generating_address_' + this._userid);
+    if (!(await lock.obtainLock())) {
+      // someone's already generating address
+      return;
     }
 
-    async loadByAuthorization(authorization)
-    {
-        if (!authorization) return false;
-        //let access_token = authorization.replace('Bearer ', '');
-        let userid = authorization; //await this._redis.get('userid_for_' + access_token);
+    let self = this;
+    return new Promise(function (resolve, reject) {
+      self._lightning.newAddress({ type: 0 }, async function (err, response) {
+        if (err) return reject('LND failure when trying to generate new address');
+        const addressAlreadyExists = await self.getAddress();
+        if (addressAlreadyExists) {
+          // one last final check, for a case of really long race condition
+          resolve();
+          return;
+        }
+        await self.addAddress(response.address);
+        if (config.bitcoind) self._bitcoindrpc.request('importaddress', [response.address, response.address, false]);
+        resolve();
+      });
+    });
+  }
 
-        if (userid)
-        {
-            this._userid = userid;
-            return true;
+  async createBill(requestId, amount, currency, amountInSats) {
+    // Generate Bill
+    try {
+      let crytpRandomBytes = crypto.randomBytes(20);
+      let token = crytpRandomBytes.toString('base64').replace(/\+/g, '_');
+
+      let timestamp = parseInt(+new Date() / 1000);
+      let bill = {
+        token: token,
+        amount: amount,
+        requestId: requestId,
+        timestamp: timestamp,
+        created_by: this.getUserId(),
+        currency: currency,
+        amountInSats: amountInSats,
+        expiration: timestamp + config.billExpiration,
+      };
+
+      this.saveBill(token, bill);
+      delete bill.created_by;
+      delete bill.requestId;
+
+      return bill;
+    } catch (Error) {
+      logger.error('User.createBill', [requestId, 'error saving bill:', Error.message]);
+      return errorTryAgainLater(res);
+    }
+  }
+
+  async sendCoins(requestId, amount, address, amountfee) {
+    let lock = new Lock(this._redis, 'generating_address_' + this.getUserId());
+    if (!(await lock.obtainLock())) {
+      return errorLockUser(res);
+    }
+
+    // Getting balance
+    let userBalance;
+    try {
+      await this.clearBalanceCache();
+      userBalance = await this.getCalculatedBalance();
+    } catch (Error) {
+      logger.log('User.sendCoins', [requestId, 'error running getCalculatedBalance():', Error.message]);
+      lock.releaseLock();
+      return errorTryAgainLater(res);
+    }
+
+    // Check balance
+    if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1)) {
+      await lock.releaseLock();
+      return errorNotEnougBalance(res);
+    }
+
+    logger.log('User.sendCoins', [requestId, this.getUserId(), 'address: ' + address, 'amount: ' + amount]);
+    let user = this;
+
+    return new Promise(function (resolve, reject) {
+      user._lightning.sendCoins({ addr: address, amount: amount }, async function (err, response) {
+        if (err) {
+          console.log('LND failure when trying to send coins:: ' + err);
+          lock.releaseLock();
+          return reject('LND failure when trying to send coins::' + err);
         }
 
-        return false;
-    }
-
-    async loadByRefreshToken(refresh_token)
-    {
-        let userid = await this._redis.get('userid_for_' + refresh_token);
-        if (userid)
-        {
-            this._userid = userid;
-            await this._generateTokens();
-            return true;
-        }
-
-        return false;
-    }
-
-    async create(userid)
-    {
-        let buffer = crypto.randomBytes(10);
-        let login = buffer.toString('hex');
-
-        buffer = crypto.randomBytes(10);
-        let password = buffer.toString('hex');
-
-        //buffer = crypto.randomBytes(24);
-        //let userid = buffer.toString('hex');
-        this._login = login;
-        this._password = password;
-        this._userid = userid;
-        await this._saveUserToDatabase();
-    }
-
-    async saveMetadata(metadata)
-    {
-        return await this._redis.set('metadata_for_' + this._userid, JSON.stringify(metadata));
-    }
-
-    async loadByLoginAndPassword(login, password)
-    {
-        let userid = await this._redis.get('user_' + login + '_' + this._hash(password));
-
-        if (userid)
-        {
-            this._userid = userid;
-            this._login = login;
-            this._password = password;
-            await this._generateTokens();
-            return true;
-        }
-        return false;
-    }
-
-    async getAddress()
-    {
-        return await this._redis.get('bitcoin_address_for_' + this._userid);
-    }
-
-    /**
-     * Asks LND for new address, and imports it to bitcoind
-     *
-     * @returns {Promise<any>}
-     */
-    async generateAddress()
-    {
-        let lock = new Lock(this._redis, 'generating_address_' + this._userid);
-        if (!(await lock.obtainLock()))
-        {
-            // someone's already generating address
-            return;
-        }
-
-        let self = this;
-        return new Promise(function (resolve, reject)
-        {
-            self._lightning.newAddress({ type: 0 }, async function (err, response)
-            {
-                if (err) return reject('LND failure when trying to generate new address');
-                const addressAlreadyExists = await self.getAddress();
-                if (addressAlreadyExists)
-                {
-                    // one last final check, for a case of really long race condition
-                    resolve();
-                    return;
-                }
-                await self.addAddress(response.address);
-                if (config.bitcoind) self._bitcoindrpc.request('importaddress', [response.address, response.address, false]);
-                resolve();
-            });
+        logger.log('User.sendCoins', [requestId, user.getUserId(), 'txid: ' + response.txid]);
+        lock.releaseLock();
+        await user.saveSendCoinsTx({
+          timestamp: parseInt(+new Date() / 1000),
+          type: 'sendcoins',
+          value: amount + amountfee,
+          fee: amountfee,
+          txid: response.txid,
+          memo: 'Send coins to ' + address,
         });
+
+        resolve(response.txid);
+      });
+    });
+  }
+
+  async watchAddress(address) {
+    if (!address) return;
+    if (config.bitcoind) return this._bitcoindrpc.request('importaddress', [address, address, false]);
+  }
+
+  /**
+   * LndHub no longer relies on redis balance as source of truth, this is
+   * more a cache now. See `this.getCalculatedBalance()` to get correct balance.
+   *
+   * @returns {Promise<number>} Balance available to spend
+   */
+  async getBalance() {
+    let balance = (await this._redis.get('balance_for_' + this._userid)) * 1;
+    if (!balance) {
+      balance = await this.getCalculatedBalance();
+      await this.saveBalance(balance);
+    }
+    return balance;
+  }
+
+  /**
+   * Accounts for all possible transactions in user's account and
+   * sums their amounts.
+   *
+   * @returns {Promise<number>} Balance available to spend
+   */
+  async getCalculatedBalance() {
+    let calculatedBalance = 0;
+
+    let swapTxs = await this.getSwapTx();
+    for (let swapTx of swapTxs) {
+      let swapTxData = JSON.parse(swapTx);
+      calculatedBalance += swapTxData.amount;
     }
 
-    async createBill(requestId, amount, currency, amountInSats)
-    {
-        // Generate Bill
-        try
-        {
-            let crytpRandomBytes = crypto.randomBytes(20);
-            let token = crytpRandomBytes.toString('base64').replace(/\+/g, "_");
+    let userinvoices = await this.getUserInvoices();
 
-            let timestamp = parseInt(+new Date() / 1000)
-            let bill = {
-                token: token,
-                amount: amount,
-                requestId: requestId, 
-                timestamp: timestamp,
-                created_by: this.getUserId(),
-                currency: currency,
-                amountInSats: amountInSats,
-                expiration: timestamp + config.billExpiration
-            }
-
-            this.saveBill(token, bill);
-            delete bill.created_by;
-            delete bill.requestId;
-            
-            return bill;
-        } catch (Error)
-        {
-            logger.error('User.createBill', [requestId, 'error saving bill:', Error.message]);
-            return errorTryAgainLater(res);
-        }
-
-
+    for (let invo of userinvoices) {
+      if (invo && invo.ispaid) {
+        calculatedBalance += +invo.amt;
+      }
     }
 
-    async sendCoins(requestId, amount, address, amountfee)
-    {
+    let txs = await this.getTxs();
+    for (let tx of txs) {
+      if (tx.type === 'bitcoind_tx') {
+        // topup
+        calculatedBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
+      } else if (tx.type === 'user_invoice' || tx.type === 'stablecoin') {
+      } else {
+        calculatedBalance -= +tx.value;
+      }
+    }
 
-        let lock = new Lock(this._redis, 'generating_address_' + this.getUserId());
-        if (!(await lock.obtainLock()))
-        {
-            return errorLockUser(res);
+    let lockedPayments = await this.getLockedPayments();
+    for (let paym of lockedPayments) {
+      // locked payments are processed in scripts/process-locked-payments.js
+      calculatedBalance -= +paym.amount + /* feelimit */ Math.floor(paym.amount * forwardFee);
+    }
+
+    return calculatedBalance;
+  }
+
+  /**
+   * LndHub no longer relies on redis balance as source of truth, this is
+   * more a cache now. See `this.getCalculatedBalance()` to get correct balance.
+   *
+   * @param balance
+   * @returns {Promise<void>}
+   */
+  async saveBalance(balance) {
+    if (config.balance_expire_seconds > 0) {
+      const key = 'balance_for_' + this._userid;
+      await this._redis.set(key, balance);
+      await this._redis.expire(key, config.balance_expire_seconds);
+    }
+  }
+
+  async clearBalanceCache() {
+    const key = 'balance_for_' + this._userid;
+    return this._redis.del(key);
+  }
+
+  async savePaidLndInvoice(doc) {
+    return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
+  }
+
+  async saveSendCoinsTx(doc) {
+    return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
+  }
+
+  async saveSwapTx(swap) {
+    return await this._redis.rpush('swap_txs_for_' + this._userid, JSON.stringify(swap));
+  }
+
+  async getSwapTx() {
+    return await this._redis.lrange('swap_txs_for_' + this._userid, 0, -1);
+  }
+
+  async saveBill(token, bill) {
+    let data = JSON.stringify(bill);
+    await this._redis.set('bill_' + token, data);
+    await this._redis.expireat('bill_' + token, bill.expiration);
+  }
+
+  async deleteBill(token) {
+    await this._redis.del('bill_' + token);
+  }
+
+  async getBill(token) {
+    let data = await this._redis.get('bill_' + token);
+    return JSON.parse(data);
+  }
+
+  async saveUserInvoice(doc) {
+    let decoded = lightningPayReq.decode(doc.payment_request);
+    let payment_hash;
+    for (let tag of decoded.tags) {
+      if (tag.tagName === 'payment_hash') {
+        payment_hash = tag.data;
+      }
+    }
+
+    await this._redis.set('payment_hash_' + payment_hash, this._userid);
+    return await this._redis.rpush('userinvoices_for_' + this._userid, JSON.stringify(doc));
+  }
+
+  /**
+   * Doent belong here, FIXME
+   */
+  async getUseridByPaymentHash(payment_hash) {
+    return await this._redis.get('payment_hash_' + payment_hash);
+  }
+
+  /**
+   * Doent belong here, FIXME
+   * @see Invo._setIsPaymentHashPaidInDatabase
+   * @see Invo.markAsPaidInDatabase
+   */
+  async setPaymentHashPaid(payment_hash, settleAmountSat) {
+    return await this._redis.set('ispaid_' + payment_hash, settleAmountSat);
+  }
+
+  async lookupInvoice(payment_hash) {
+    let that = this;
+    return new Promise(function (resolve, reject) {
+      that._lightning.lookupInvoice({ r_hash_str: payment_hash }, function (err, response) {
+        if (err) resolve({});
+        resolve(response);
+      });
+    });
+  }
+
+  /**
+   * Doent belong here, FIXME
+   * @see Invo._getIsPaymentHashMarkedPaidInDatabase
+   * @see Invo.getIsMarkedAsPaidInDatabase
+   */
+  async getPaymentHashPaid(payment_hash) {
+    return await this._redis.get('ispaid_' + payment_hash);
+  }
+
+  async syncInvoicePaid(payment_hash) {
+    const invoice = await this.lookupInvoice(payment_hash);
+    const ispaid = invoice.settled; // TODO: start using `state` instead as its future proof, and this one might get deprecated
+    if (ispaid) {
+      // so invoice was paid after all
+      await this.setPaymentHashPaid(payment_hash, invoice.amt_paid_msat ? Math.floor(invoice.amt_paid_msat / 1000) : invoice.amt_paid_sat);
+      await this.clearBalanceCache();
+    }
+    return ispaid;
+  }
+
+  async getUserInvoices(limit) {
+    let range = await this._redis.lrange('userinvoices_for_' + this._userid, 0, -1);
+    if (limit && !isNaN(parseInt(limit))) {
+      range = range.slice(parseInt(limit) * -1);
+    }
+    let result = [];
+    for (let invoice of range) {
+      invoice = JSON.parse(invoice);
+      let decoded = lightningPayReq.decode(invoice.payment_request);
+      invoice.description = '';
+      for (let tag of decoded.tags) {
+        if (tag.tagName === 'description') {
+          try {
+            invoice.description += decodeURIComponent(tag.data);
+          } catch (_) {
+            invoice.description += tag.data;
+          }
         }
-
-        // Getting balance
-        let userBalance;
-        try
-        {
-            await this.clearBalanceCache();
-            userBalance = await this.getCalculatedBalance();
-        } catch (Error)
-        {
-            logger.log('User.sendCoins', [requestId, 'error running getCalculatedBalance():', Error.message]);
-            lock.releaseLock();
-            return errorTryAgainLater(res);
+        if (tag.tagName === 'payment_hash') {
+          invoice.payment_hash = tag.data;
         }
+      }
 
-        // Check balance
-        if (!(userBalance >= +amount + Math.floor(amount * forwardFee) + 1))
-        {
-            await lock.releaseLock();
-            return errorNotEnougBalance(res);
+      let paymentHashPaidAmountSat = 0;
+      if (_invoice_ispaid_cache[invoice.payment_hash]) {
+        // static cache hit
+        invoice.ispaid = true;
+        paymentHashPaidAmountSat = _invoice_ispaid_cache[invoice.payment_hash];
+      } else {
+        // static cache miss, asking redis cache
+        paymentHashPaidAmountSat = await this.getPaymentHashPaid(invoice.payment_hash);
+        if (paymentHashPaidAmountSat) invoice.ispaid = true;
+      }
+
+      if (!invoice.ispaid) {
+        if (decoded && decoded.timestamp > +new Date() / 1000 - 3600 * 24 * 5) {
+          // if invoice is not too old we query lnd to find out if its paid
+          invoice.ispaid = await this.syncInvoicePaid(invoice.payment_hash);
+          paymentHashPaidAmountSat = await this.getPaymentHashPaid(invoice.payment_hash); // since we have just saved it
         }
+      } else {
+        _invoice_ispaid_cache[invoice.payment_hash] = paymentHashPaidAmountSat;
+      }
 
-        logger.log('User.sendCoins', [requestId, this.getUserId(), 'address: ' + address, 'amount: ' + amount]);
-        let user = this;
+      invoice.amt =
+        paymentHashPaidAmountSat && parseInt(paymentHashPaidAmountSat) > decoded.satoshis
+          ? parseInt(paymentHashPaidAmountSat)
+          : decoded.satoshis;
+      invoice.expire_time = 3600 * 24;
+      // ^^^default; will keep for now. if we want to un-hardcode it - it should be among tags (`expire_time`)
+      invoice.timestamp = decoded.timestamp;
+      invoice.type = 'user_invoice';
+      result.push(invoice);
+    }
 
-        return new Promise(function (resolve, reject)
-        {
-            user._lightning.sendCoins({ addr: address, amount: amount }, async function (err, response)
-            {
-                if (err)
-                {
-                    console.log('LND failure when trying to send coins:: ' + err)
-                    lock.releaseLock();
-                    return reject('LND failure when trying to send coins::' + err);
-                }
+    return result;
+  }
 
-                logger.log('User.sendCoins', [requestId, user.getUserId(), 'txid: ' + response.txid]);
-                lock.releaseLock();
-                await user.saveSendCoinsTx({
-                    timestamp: parseInt(+new Date() / 1000),
-                    type: 'sendcoins',
-                    value: amount + amountfee,
-                    fee: amountfee,
-                    txid: response.txid,
-                    memo: 'Send coins to ' + address
-                });
+  async addAddress(address) {
+    await this._redis.set('bitcoin_address_for_' + this._userid, address);
+  }
 
-                resolve(response.txid);
-            });
+  /**
+   * User's onchain txs that are >= 3 confs
+   * Queries bitcoind RPC.
+   *
+   * @returns {Promise<Array>}
+   */
+  async getTxs() {
+    const addr = await this.getOrGenerateAddress();
+    let txs = await this._listtransactions();
+    txs = txs.result;
+    let result = [];
+    for (let tx of txs) {
+      if (tx.confirmations >= 3 && tx.address === addr && tx.category === 'receive') {
+        tx.type = 'bitcoind_tx';
+        result.push(tx);
+      }
+    }
+
+    // probare esto
+    let userinvoices = await this.getUserInvoices();
+
+    for (let invo of userinvoices) {
+      if (invo && invo.ispaid) {
+        result.push({
+          category: 'receive',
+          confirmations: 0,
+          amount: invo.amt,
+          address: null,
+          time: invo.timestamp,
+          type: invo.type,
+          description: invo.description,
+          payer: invo.payer,
+          payee: invo.payee,
         });
+      }
     }
+    // finaliza prueba
 
-    async watchAddress(address)
-    {
-        if (!address) return;
-        if (config.bitcoind) return this._bitcoindrpc.request('importaddress', [address, address, false]);
+    // SWAP Transactions
+    let swapTxs = await this.getSwapTx();
+    for (let swapTx of swapTxs) {
+      result.push(JSON.parse(swapTx));
     }
+    // END SWAP Transactions
 
-    /**
-     * LndHub no longer relies on redis balance as source of truth, this is
-     * more a cache now. See `this.getCalculatedBalance()` to get correct balance.
-     *
-     * @returns {Promise<number>} Balance available to spend
-     */
-    async getBalance()
-    {
-        let balance = (await this._redis.get('balance_for_' + this._userid)) * 1;
-        if (!balance)
-        {
-            balance = await this.getCalculatedBalance();
-            await this.saveBalance(balance);
-        }
-        return balance;
-    }
+    let range = await this._redis.lrange('txs_for_' + this._userid, 0, -1);
+    for (let invoice of range) {
+      invoice = JSON.parse(invoice);
+      if (invoice.type === 'sendcoins' || invoice.type === 'stablecoin') {
+      } else {
+        invoice.type = 'paid_invoice';
 
-    /**
-     * Accounts for all possible transactions in user's account and
-     * sums their amounts.
-     *
-     * @returns {Promise<number>} Balance available to spend
-     */
-    async getCalculatedBalance()
-    {
-        let calculatedBalance = 0;
-
-        let swapTxs = await this.getSwapTx();
-        for(let swapTx of swapTxs){
-            let swapTxData = JSON.parse(swapTx);
-            calculatedBalance += swapTxData.amount;
-        }
-        
-        let userinvoices = await this.getUserInvoices();
-
-        for (let invo of userinvoices)
-        {
-            if (invo && invo.ispaid)
-            {
-                calculatedBalance += +invo.amt;
-            }
-        }
-
-        let txs = await this.getTxs();
-        for (let tx of txs)
-        {
-            if (tx.type === 'bitcoind_tx')
-            {
-                // topup
-                calculatedBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
-            } else if (tx.type === 'user_invoice' || tx.type === 'stablecoin')
-            {
-
-            }
-            else
-            {
-                calculatedBalance -= +tx.value;
-            }
-        }
-
-        let lockedPayments = await this.getLockedPayments();
-        for (let paym of lockedPayments)
-        {
-            // locked payments are processed in scripts/process-locked-payments.js
-            calculatedBalance -= +paym.amount + /* feelimit */ Math.floor(paym.amount * forwardFee);
-        }
-
-        return calculatedBalance;
-    }
-
-    /**
-     * LndHub no longer relies on redis balance as source of truth, this is
-     * more a cache now. See `this.getCalculatedBalance()` to get correct balance.
-     *
-     * @param balance
-     * @returns {Promise<void>}
-     */
-    async saveBalance(balance)
-    {
-        if (config.balance_expire_seconds > 0)
-        {
-            const key = 'balance_for_' + this._userid;
-            await this._redis.set(key, balance);
-            await this._redis.expire(key, config.balance_expire_seconds);
-        }
-    }
-
-    async clearBalanceCache()
-    {
-        const key = 'balance_for_' + this._userid;
-        return this._redis.del(key);
-    }
-
-    async savePaidLndInvoice(doc)
-    {
-        return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
-    }
-
-    async saveSendCoinsTx(doc)
-    {
-        return await this._redis.rpush('txs_for_' + this._userid, JSON.stringify(doc));
-    }
-
-    async saveSwapTx(swap)
-    {
-        return await this._redis.rpush('swap_txs_for_' + this._userid, JSON.stringify(swap));
-    }
-
-    async getSwapTx()
-    {
-        return await this._redis.lrange('swap_txs_for_' + this._userid, 0, -1);
-    }
-
-    async saveBill(token, bill)
-    {
-        let data = JSON.stringify(bill);
-        await this._redis.set('bill_' + token, data);
-        await this._redis.expireat('bill_' + token, bill.expiration);
-    }
-
-    async deleteBill(token)
-    {
-        await this._redis.del('bill_' + token);
-    }
-
-    async getBill(token)
-    {
-        let data = await this._redis.get('bill_' + token);
-        return JSON.parse(data)
-    }
-
-    async saveUserInvoice(doc)
-    {
-        let decoded = lightningPayReq.decode(doc.payment_request);
-        let payment_hash;
-        for (let tag of decoded.tags)
-        {
-            if (tag.tagName === 'payment_hash')
-            {
-                payment_hash = tag.data;
-            }
-        }
-
-        await this._redis.set('payment_hash_' + payment_hash, this._userid);
-        return await this._redis.rpush('userinvoices_for_' + this._userid, JSON.stringify(doc));
-    }
-
-    /**
-     * Doent belong here, FIXME
-     */
-    async getUseridByPaymentHash(payment_hash)
-    {
-        return await this._redis.get('payment_hash_' + payment_hash);
-    }
-
-    /**
-     * Doent belong here, FIXME
-     * @see Invo._setIsPaymentHashPaidInDatabase
-     * @see Invo.markAsPaidInDatabase
-     */
-    async setPaymentHashPaid(payment_hash, settleAmountSat)
-    {
-        return await this._redis.set('ispaid_' + payment_hash, settleAmountSat);
-    }
-
-    async lookupInvoice(payment_hash)
-    {
-        let that = this;
-        return new Promise(function (resolve, reject)
-        {
-            that._lightning.lookupInvoice({ r_hash_str: payment_hash }, function (err, response)
-            {
-                if (err) resolve({});
-                resolve(response);
-            });
-        });
-    }
-
-    /**
-     * Doent belong here, FIXME
-     * @see Invo._getIsPaymentHashMarkedPaidInDatabase
-     * @see Invo.getIsMarkedAsPaidInDatabase
-     */
-    async getPaymentHashPaid(payment_hash)
-    {
-        return await this._redis.get('ispaid_' + payment_hash);
-    }
-
-    async syncInvoicePaid(payment_hash)
-    {
-        const invoice = await this.lookupInvoice(payment_hash);
-        const ispaid = invoice.settled; // TODO: start using `state` instead as its future proof, and this one might get deprecated
-        if (ispaid)
-        {
-            // so invoice was paid after all
-            await this.setPaymentHashPaid(payment_hash, invoice.amt_paid_msat ? Math.floor(invoice.amt_paid_msat / 1000) : invoice.amt_paid_sat);
-            await this.clearBalanceCache();
-        }
-        return ispaid;
-    }
-
-    async getUserInvoices(limit)
-    {
-        let range = await this._redis.lrange('userinvoices_for_' + this._userid, 0, -1);
-        if (limit && !isNaN(parseInt(limit)))
-        {
-            range = range.slice(parseInt(limit) * -1);
-        }
-        let result = [];
-        for (let invoice of range)
-        {
-            invoice = JSON.parse(invoice);
-            let decoded = lightningPayReq.decode(invoice.payment_request);
-            invoice.description = '';
-            for (let tag of decoded.tags)
-            {
-                if (tag.tagName === 'description')
-                {
-                    try
-                    {
-                        invoice.description += decodeURIComponent(tag.data);
-                    } catch (_)
-                    {
-                        invoice.description += tag.data;
-                    }
-                }
-                if (tag.tagName === 'payment_hash')
-                {
-                    invoice.payment_hash = tag.data;
-                }
-            }
-
-            let paymentHashPaidAmountSat = 0;
-            if (_invoice_ispaid_cache[invoice.payment_hash])
-            {
-                // static cache hit
-                invoice.ispaid = true;
-                paymentHashPaidAmountSat = _invoice_ispaid_cache[invoice.payment_hash];
-            } else
-            {
-                // static cache miss, asking redis cache
-                paymentHashPaidAmountSat = await this.getPaymentHashPaid(invoice.payment_hash);
-                if (paymentHashPaidAmountSat) invoice.ispaid = true;
-            }
-
-            if (!invoice.ispaid)
-            {
-                if (decoded && decoded.timestamp > +new Date() / 1000 - 3600 * 24 * 5)
-                {
-                    // if invoice is not too old we query lnd to find out if its paid
-                    invoice.ispaid = await this.syncInvoicePaid(invoice.payment_hash);
-                    paymentHashPaidAmountSat = await this.getPaymentHashPaid(invoice.payment_hash); // since we have just saved it
-                }
-            } else
-            {
-                _invoice_ispaid_cache[invoice.payment_hash] = paymentHashPaidAmountSat;
-            }
-
-            invoice.amt =
-                paymentHashPaidAmountSat && parseInt(paymentHashPaidAmountSat) > decoded.satoshis
-                    ? parseInt(paymentHashPaidAmountSat)
-                    : decoded.satoshis;
-            invoice.expire_time = 3600 * 24;
-            // ^^^default; will keep for now. if we want to un-hardcode it - it should be among tags (`expire_time`)
-            invoice.timestamp = decoded.timestamp;
-            invoice.type = 'user_invoice';
-            result.push(invoice);
-        }
-
-        return result;
-    }
-
-    async addAddress(address)
-    {
-        await this._redis.set('bitcoin_address_for_' + this._userid, address);
-    }
-
-    /**
-     * User's onchain txs that are >= 3 confs
-     * Queries bitcoind RPC.
-     *
-     * @returns {Promise<Array>}
-     */
-    async getTxs()
-    {
-        const addr = await this.getOrGenerateAddress();
-        let txs = await this._listtransactions();
-        txs = txs.result;
-        let result = [];
-        for (let tx of txs)
-        {
-            if (tx.confirmations >= 3 && tx.address === addr && tx.category === 'receive')
-            {
-                tx.type = 'bitcoind_tx';
-                result.push(tx);
-            }
-        }
-
-        // probare esto
-        let userinvoices = await this.getUserInvoices();
-
-        for (let invo of userinvoices)
-        {
-            if (invo && invo.ispaid)
-            {
-                result.push({
-                    category: "receive",
-                    confirmations: 0,
-                    amount: invo.amt,
-                    address: null,
-                    time: invo.timestamp,
-                    type: invo.type,
-                    description: invo.description,
-                    payer: invo.payer,
-                    payee: invo.payee
-                })
-            }
-        }
-        // finaliza prueba
-        
-        // SWAP Transactions
-        let swapTxs = await this.getSwapTx();
-        for(let swapTx of swapTxs){
-            result.push(JSON.parse(swapTx));
-        }
-        // END SWAP Transactions
-        
-        let range = await this._redis.lrange('txs_for_' + this._userid, 0, -1);
-        for (let invoice of range)
-        {
-            invoice = JSON.parse(invoice);
-            if (invoice.type === "sendcoins" || invoice.type === "stablecoin")
-            {
-
-            } else
-            {
-                invoice.type = 'paid_invoice';
-
-                // for internal invoices it might not have properties `payment_route`  and `decoded`...
-                if (invoice.payment_route)
-                {
-                    invoice.fee = +invoice.payment_route.total_fees;
-                    /*  this was adding twice the fee, as total_amt already has the fee in it 
+        // for internal invoices it might not have properties `payment_route`  and `decoded`...
+        if (invoice.payment_route) {
+          invoice.fee = +invoice.payment_route.total_fees;
+          /*  this was adding twice the fee, as total_amt already has the fee in it 
                     invoice.value = +invoice.payment_route.total_fees + +invoice.payment_route.total_amt;
                     if (invoice.payment_route.total_amt_msat && invoice.payment_route.total_amt_msat / 1000 !== +invoice.payment_route.total_amt)
                     {
@@ -610,332 +517,281 @@ export class User
 
                     replaced by the following line:
                     */
-                    invoice.value = +invoice.payment_route.total_amt;
-
-                } else
-                {
-                    invoice.fee = 0;
-                }
-                if (invoice.decoded)
-                {
-                    invoice.timestamp = invoice.decoded.timestamp;
-                    invoice.memo = invoice.decoded.description;
-                }
-                if (invoice.payment_preimage)
-                {
-                    invoice.payment_preimage = Buffer.from(invoice.payment_preimage, 'hex').toString('hex');
-                }
-                // removing unsued by client fields to reduce size
-                delete invoice.payment_error;
-                delete invoice.payment_route;
-                delete invoice.pay_req;
-                delete invoice.decoded;
-
-            }
-
-            result.push(invoice);
+          invoice.value = +invoice.payment_route.total_amt;
+        } else {
+          invoice.fee = 0;
         }
-        return result;
-    }
-
-    /**
-     * Simple caching for this._bitcoindrpc.request('listtransactions', ['*', 100500, 0, true]);
-     * since its too much to fetch from bitcoind every time
-     *
-     * @returns {Promise<*>}
-     * @private
-     */
-    async _listtransactions()
-    {
-        let response = _listtransactions_cache;
-        if (response)
-        {
-            if (+new Date() > _listtransactions_cache_expiry_ts)
-            {
-                // invalidate cache
-                response = _listtransactions_cache = false;
-            } else
-            {
-                try
-                {
-                    return JSON.parse(response);
-                } catch (_)
-                {
-                    // nop
-                }
-            }
+        if (invoice.decoded) {
+          invoice.timestamp = invoice.decoded.timestamp;
+          invoice.memo = invoice.decoded.description;
         }
-
-        try
-        {
-            let ret = { result: [] };
-            if (config.bitcoind)
-            {
-                let txs = await this._bitcoindrpc.request('listtransactions', ['*', 100500, 0, true]);
-                // now, compacting response a bit
-                for (const tx of txs.result)
-                {
-                    ret.result.push({
-                        category: tx.category,
-                        amount: tx.amount,
-                        confirmations: tx.confirmations,
-                        address: tx.address,
-                        time: tx.blocktime || tx.time,
-                    });
-                }
-            } else
-            {
-                let txs = await this._getChainTransactions();
-                ret.result.push(...txs);
-            }
-            _listtransactions_cache = JSON.stringify(ret);
-            _listtransactions_cache_expiry_ts = +new Date() + 5 * 60 * 1000; // 5 min
-            this._redis.set('listtransactions', _listtransactions_cache);
-            return ret;
-        } catch (error)
-        {
-            console.warn('listtransactions error:', error);
-            let _listtransactions_cache = await this._redis.get('listtransactions');
-            if (!_listtransactions_cache) return { result: [] };
-            return JSON.parse(_listtransactions_cache);
+        if (invoice.payment_preimage) {
+          invoice.payment_preimage = Buffer.from(invoice.payment_preimage, 'hex').toString('hex');
         }
+        // removing unsued by client fields to reduce size
+        delete invoice.payment_error;
+        delete invoice.payment_route;
+        delete invoice.pay_req;
+        delete invoice.decoded;
+      }
+
+      result.push(invoice);
     }
+    return result;
+  }
 
-    async _getChainTransactions()
-    {
-        return new Promise((resolve, reject) =>
-        {
-            this._lightning.getTransactions({}, (err, data) =>
-            {
-                if (err) return reject(err);
-                const { transactions } = data;
-                const outTxns = [];
-                // on lightning incoming transactions have no labels
-                // for now filter out known labels to reduce transactions
-                transactions
-                    .filter((tx) => tx.label !== 'external' && !tx.label.includes('openchannel'))
-                    .map((tx) =>
-                    {
-                        const decodedTx = decodeRawHex(tx.raw_tx_hex, config.network);
-                        decodedTx.outputs.forEach((vout) =>
-                            outTxns.push({
-                                // mark all as received, since external is filtered out
-                                category: 'receive',
-                                confirmations: tx.num_confirmations,
-                                amount: Number(vout.value),
-                                address: vout.scriptPubKey.addresses[0],
-                                time: tx.time_stamp,
-                            }),
-                        );
-                    });
-
-                resolve(outTxns);
-            });
-        });
-    }
-
-    /**
-     * Returning onchain txs for user's address that are less than 3 confs
-     *
-     * @returns {Promise<Array>}
-     */
-    async getPendingTxs()
-    {
-        const addr = await this.getOrGenerateAddress();
-        let txs = await this._listtransactions();
-        txs = txs.result;
-        let result = [];
-        for (let tx of txs)
-        {
-            if (tx.confirmations < 3 && tx.address === addr && tx.category === 'receive')
-            {
-                tx.type = 'bitcoind_tx';
-                result.push(tx);
-            }
+  /**
+   * Simple caching for this._bitcoindrpc.request('listtransactions', ['*', 100500, 0, true]);
+   * since its too much to fetch from bitcoind every time
+   *
+   * @returns {Promise<*>}
+   * @private
+   */
+  async _listtransactions() {
+    let response = _listtransactions_cache;
+    if (response) {
+      if (+new Date() > _listtransactions_cache_expiry_ts) {
+        // invalidate cache
+        response = _listtransactions_cache = false;
+      } else {
+        try {
+          return JSON.parse(response);
+        } catch (_) {
+          // nop
         }
-        return result;
+      }
     }
 
-    async _generateTokens()
-    {
-        let buffer = crypto.randomBytes(20);
-        this._acess_token = buffer.toString('hex');
-
-        buffer = crypto.randomBytes(20);
-        this._refresh_token = buffer.toString('hex');
-
-        await this._redis.set('userid_for_' + this._acess_token, this._userid);
-        await this._redis.set('userid_for_' + this._refresh_token, this._userid);
-        await this._redis.set('access_token_for_' + this._userid, this._acess_token);
-        await this._redis.set('refresh_token_for_' + this._userid, this._refresh_token);
-    }
-
-    async _saveUserToDatabase()
-    {
-        let key;
-        await this._redis.set((key = 'user_' + this._login + '_' + this._hash(this._password)), this._userid);
-    }
-
-    /**
-     * Fetches all onchain txs for user's address, and compares them to
-     * already imported txids (stored in database); Ones that are not imported -
-     * get their balance added to user's balance, and its txid added to 'imported' list.
-     *
-     * @returns {Promise<void>}
-     */
-    async accountForPosibleTxids()
-    {
-        return; // TODO: remove
-        let onchain_txs = await this.getTxs();
-        let imported_txids = await this._redis.lrange('imported_txids_for_' + this._userid, 0, -1);
-        for (let tx of onchain_txs)
-        {
-            if (tx.type !== 'bitcoind_tx') continue;
-            let already_imported = false;
-            for (let imported_txid of imported_txids)
-            {
-                if (tx.txid === imported_txid) already_imported = true;
-            }
-
-            if (!already_imported && tx.category === 'receive')
-            {
-                // first, locking...
-                let lock = new Lock(this._redis, 'importing_' + tx.txid);
-                if (!(await lock.obtainLock()))
-                {
-                    // someone's already importing this tx
-                    return;
-                }
-
-                let userBalance = await this.getCalculatedBalance();
-                // userBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
-                // no need to add since it was accounted for in `this.getCalculatedBalance()`
-                await this.saveBalance(userBalance);
-                await this._redis.rpush('imported_txids_for_' + this._userid, tx.txid);
-                await lock.releaseLock();
-            }
+    try {
+      let ret = { result: [] };
+      if (config.bitcoind) {
+        let txs = await this._bitcoindrpc.request('listtransactions', ['*', 100500, 0, true]);
+        // now, compacting response a bit
+        for (const tx of txs.result) {
+          ret.result.push({
+            category: tx.category,
+            amount: tx.amount,
+            confirmations: tx.confirmations,
+            address: tx.address,
+            time: tx.blocktime || tx.time,
+          });
         }
+      } else {
+        let txs = await this._getChainTransactions();
+        ret.result.push(...txs);
+      }
+      _listtransactions_cache = JSON.stringify(ret);
+      _listtransactions_cache_expiry_ts = +new Date() + 5 * 60 * 1000; // 5 min
+      this._redis.set('listtransactions', _listtransactions_cache);
+      return ret;
+    } catch (error) {
+      console.warn('listtransactions error:', error);
+      let _listtransactions_cache = await this._redis.get('listtransactions');
+      if (!_listtransactions_cache) return { result: [] };
+      return JSON.parse(_listtransactions_cache);
     }
+  }
 
-    /**
-     * Adds invoice to a list of user's locked payments.
-     * Used to calculate balance till the lock is lifted (payment is in
-     * determined state - succeded or failed).
-     *
-     * @param {String} pay_req
-     * @param {Object} decodedInvoice
-     * @returns {Promise<void>}
-     */
-    async lockFunds(pay_req, decodedInvoice)
-    {
-        let doc = {
-            pay_req,
-            amount: +decodedInvoice.num_satoshis,
-            timestamp: Math.floor(+new Date() / 1000),
-        };
+  async _getChainTransactions() {
+    return new Promise((resolve, reject) => {
+      this._lightning.getTransactions({}, (err, data) => {
+        if (err) return reject(err);
+        const { transactions } = data;
+        const outTxns = [];
+        // on lightning incoming transactions have no labels
+        // for now filter out known labels to reduce transactions
+        transactions
+          .filter((tx) => tx.label !== 'external' && !tx.label.includes('openchannel'))
+          .map((tx) => {
+            const decodedTx = decodeRawHex(tx.raw_tx_hex, config.network);
+            decodedTx.outputs.forEach((vout) =>
+              outTxns.push({
+                // mark all as received, since external is filtered out
+                category: 'receive',
+                confirmations: tx.num_confirmations,
+                amount: Number(vout.value),
+                address: vout.scriptPubKey.addresses[0],
+                time: tx.time_stamp,
+              }),
+            );
+          });
 
-        return this._redis.rpush('locked_payments_for_' + this._userid, JSON.stringify(doc));
+        resolve(outTxns);
+      });
+    });
+  }
+
+  /**
+   * Returning onchain txs for user's address that are less than 3 confs
+   *
+   * @returns {Promise<Array>}
+   */
+  async getPendingTxs() {
+    const addr = await this.getOrGenerateAddress();
+    let txs = await this._listtransactions();
+    txs = txs.result;
+    let result = [];
+    for (let tx of txs) {
+      if (tx.confirmations < 3 && tx.address === addr && tx.category === 'receive') {
+        tx.type = 'bitcoind_tx';
+        result.push(tx);
+      }
     }
+    return result;
+  }
 
-    /**
-     * Strips specific payreq from the list of locked payments
-     * @param pay_req
-     * @returns {Promise<void>}
-     */
-    async unlockFunds(pay_req)
-    {
-        let payments = await this.getLockedPayments();
-        let saveBack = [];
-        for (let paym of payments)
-        {
-            if (paym.pay_req !== pay_req)
-            {
-                saveBack.push(paym);
-            }
+  async _generateTokens() {
+    let buffer = crypto.randomBytes(20);
+    this._acess_token = buffer.toString('hex');
+
+    buffer = crypto.randomBytes(20);
+    this._refresh_token = buffer.toString('hex');
+
+    await this._redis.set('userid_for_' + this._acess_token, this._userid);
+    await this._redis.set('userid_for_' + this._refresh_token, this._userid);
+    await this._redis.set('access_token_for_' + this._userid, this._acess_token);
+    await this._redis.set('refresh_token_for_' + this._userid, this._refresh_token);
+  }
+
+  async _saveUserToDatabase() {
+    let key;
+    await this._redis.set((key = 'user_' + this._login + '_' + this._hash(this._password)), this._userid);
+  }
+
+  /**
+   * Fetches all onchain txs for user's address, and compares them to
+   * already imported txids (stored in database); Ones that are not imported -
+   * get their balance added to user's balance, and its txid added to 'imported' list.
+   *
+   * @returns {Promise<void>}
+   */
+  async accountForPosibleTxids() {
+    return; // TODO: remove
+    let onchain_txs = await this.getTxs();
+    let imported_txids = await this._redis.lrange('imported_txids_for_' + this._userid, 0, -1);
+    for (let tx of onchain_txs) {
+      if (tx.type !== 'bitcoind_tx') continue;
+      let already_imported = false;
+      for (let imported_txid of imported_txids) {
+        if (tx.txid === imported_txid) already_imported = true;
+      }
+
+      if (!already_imported && tx.category === 'receive') {
+        // first, locking...
+        let lock = new Lock(this._redis, 'importing_' + tx.txid);
+        if (!(await lock.obtainLock())) {
+          // someone's already importing this tx
+          return;
         }
 
-        await this._redis.del('locked_payments_for_' + this._userid);
-        for (let doc of saveBack)
-        {
-            await this._redis.rpush('locked_payments_for_' + this._userid, JSON.stringify(doc));
+        let userBalance = await this.getCalculatedBalance();
+        // userBalance += new BigNumber(tx.amount).multipliedBy(100000000).toNumber();
+        // no need to add since it was accounted for in `this.getCalculatedBalance()`
+        await this.saveBalance(userBalance);
+        await this._redis.rpush('imported_txids_for_' + this._userid, tx.txid);
+        await lock.releaseLock();
+      }
+    }
+  }
+
+  /**
+   * Adds invoice to a list of user's locked payments.
+   * Used to calculate balance till the lock is lifted (payment is in
+   * determined state - succeded or failed).
+   *
+   * @param {String} pay_req
+   * @param {Object} decodedInvoice
+   * @returns {Promise<void>}
+   */
+  async lockFunds(pay_req, decodedInvoice) {
+    let doc = {
+      pay_req,
+      amount: +decodedInvoice.num_satoshis,
+      timestamp: Math.floor(+new Date() / 1000),
+    };
+
+    return this._redis.rpush('locked_payments_for_' + this._userid, JSON.stringify(doc));
+  }
+
+  /**
+   * Strips specific payreq from the list of locked payments
+   * @param pay_req
+   * @returns {Promise<void>}
+   */
+  async unlockFunds(pay_req) {
+    let payments = await this.getLockedPayments();
+    let saveBack = [];
+    for (let paym of payments) {
+      if (paym.pay_req !== pay_req) {
+        saveBack.push(paym);
+      }
+    }
+
+    await this._redis.del('locked_payments_for_' + this._userid);
+    for (let doc of saveBack) {
+      await this._redis.rpush('locked_payments_for_' + this._userid, JSON.stringify(doc));
+    }
+  }
+
+  async getLockedPayments() {
+    let payments = await this._redis.lrange('locked_payments_for_' + this._userid, 0, -1);
+    let result = [];
+    for (let paym of payments) {
+      let json;
+      try {
+        json = JSON.parse(paym);
+        result.push(json);
+      } catch (_) {}
+    }
+
+    return result;
+  }
+
+  async getOrGenerateAddress() {
+    let addr = await this.getAddress();
+    if (!addr) {
+      await this.generateAddress();
+      addr = await this.getAddress();
+    }
+    if (!addr) throw new Error('cannot get transactions: no onchain address assigned to user');
+    return addr;
+  }
+
+  async retrieveKeysAddress() {
+    return await this._redis.keys('bitcoin_address_for_*');
+  }
+
+  async matchAddressWithLocalInformation(address) {
+    let keys = await this.retrieveKeysAddress();
+    let match = await this._redis.mget(keys).then((resultValues) => {
+      for (let value of resultValues) {
+        if (value === address) {
+          return true;
         }
+      }
+      return false;
+    });
+
+    return match;
+  }
+
+  _hash(string) {
+    return crypto.createHash('sha256').update(string).digest().toString('hex');
+  }
+
+  /**
+   * Shuffles array in place. ES6 version
+   * @param {Array} a items An array containing the items.
+   */
+  static _shuffle(a) {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
     }
+    return a;
+  }
 
-    async getLockedPayments()
-    {
-        let payments = await this._redis.lrange('locked_payments_for_' + this._userid, 0, -1);
-        let result = [];
-        for (let paym of payments)
-        {
-            let json;
-            try
-            {
-                json = JSON.parse(paym);
-                result.push(json);
-            } catch (_) { }
-        }
-
-        return result;
-    }
-
-    async getOrGenerateAddress()
-    {
-        let addr = await this.getAddress();
-        if (!addr)
-        {
-            await this.generateAddress();
-            addr = await this.getAddress();
-        }
-        if (!addr) throw new Error('cannot get transactions: no onchain address assigned to user');
-        return addr;
-    }
-
-    async retrieveKeysAddress()
-    {
-        return await this._redis.keys('bitcoin_address_for_*');
-    }
-
-    async matchAddressWithLocalInformation(address)
-    {
-        let keys = await this.retrieveKeysAddress();
-        let match = await this._redis.mget(keys).then((resultValues) =>
-        {
-
-            for (let value of resultValues)
-            {
-                if (value === address)
-                {
-                    return true;
-                }
-            }
-            return false;
-
-        });
-
-        return match;
-    }
-
-    _hash(string)
-    {
-        return crypto.createHash('sha256').update(string).digest().toString('hex');
-    }
-
-    /**
-     * Shuffles array in place. ES6 version
-     * @param {Array} a items An array containing the items.
-     */
-    static _shuffle(a)
-    {
-        for (let i = a.length - 1; i > 0; i--)
-        {
-            const j = Math.floor(Math.random() * (i + 1));
-            [a[i], a[j]] = [a[j], a[i]];
-        }
-        return a;
-    }
-
-    static async _sleep(s)
-    {
-        return new Promise((r) => setTimeout(r, s * 1000));
-    }
+  static async _sleep(s) {
+    return new Promise((r) => setTimeout(r, s * 1000));
+  }
 }
