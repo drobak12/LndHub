@@ -8,8 +8,8 @@ let config = {
   billUrl: '/bill',
   billProcessUrl: '/bill/process',
   enableUpdateDescribeGraph: false,
-  postRateLimit: 100,
-  rateLimit: 200,
+  postRateLimit: 800,
+  rateLimit: 1000,
   forwardReserveFee: 0.01, // default 0.01
   intraHubFee: 0.001, // default 0.003
   wallet: {
