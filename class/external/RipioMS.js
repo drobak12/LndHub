@@ -12,15 +12,16 @@ export class RipioMS extends IExchangeService {
   }
 
   async createAccount(userId) {
-    if (!(await this._getReferenceId(config.exchangeMs.userId))) {
-      let exchangeReferenceId = await this._performCreateAccount(config.exchangeMs.userId);
-      await this._saveExchangeAccount(exchangeReferenceId);
+    let referenceId = await this._getReferenceId(config.exchangeMs.userId);
+    if (!referenceId) {
+      await this._performCreateAccount(config.exchangeMs.userId);
+      await this._saveExchangeAccount(config.exchangeMs.userId);
     }
   }
 
   async loadStableCoin(userId, transactionId, amount, currencyOrigin, currencyDestination) {
-    userId = userId.replace('.', '_');
     userId = config.exchangeMs.userId;
+    userId = userId.replace('.', '_');
 
     let pair = currencyOrigin + '_' + currencyDestination;
     let quote = await this._createQuote(pair, transactionId);
@@ -39,8 +40,8 @@ export class RipioMS extends IExchangeService {
   }
 
   async unloadStableCoin(userId, transactionId, amount, currencyOrigin, currencyDestination) {
-    userId = userId.replace('.', '_');
     userId = config.exchangeMs.userId;
+    userId = userId.replace('.', '_');
     amount = amount.toFixed(8);
 
     let pair = currencyOrigin + '_' + currencyDestination;
@@ -167,7 +168,7 @@ export class RipioMS extends IExchangeService {
   }
 
   async _saveExchangeAccount(referenceId) {
-    await this._redis.set('exchange_account_' + this._userid, new String(referenceId));
+    await this._redis.set('exchange_account_' + referenceId, new String(referenceId));
   }
 
   async _getReferenceId(userId) {

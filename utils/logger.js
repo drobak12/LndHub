@@ -43,6 +43,14 @@ function log(label, message) {
   });
 }
 
+function debug(label, message) {
+  logger.log({
+    level: 'debug',
+    label: label,
+    message: JSON.stringify(message),
+  });
+}
+
 /**
  * TODO: we can do additional reporting here
  * @param {string} label group label
@@ -58,3 +66,4 @@ function error(label, message) {
 
 exports.log = log;
 exports.error = error;
+exports.debug = debug;

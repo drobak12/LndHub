@@ -2,9 +2,10 @@ import { WalletMS } from './external/WalletMS';
 import { Exchange } from './external/Exchange';
 import { RipioMS } from './external/RipioMS';
 import { MockMS } from './external/MockMS';
-const config = require('../config');
+import { Currency } from './Currency';
 
-let logger = require('../utils/logger');
+const config = require('../config');
+const ERROR_UPPER_LIMIT_CODE = 500;
 
 export class Wallet {
   constructor(userid, currency, redis) {
@@ -40,6 +41,8 @@ export class Wallet {
   }
 
   async loadBalanceAmountToWallet(amountSats, transactionId) {
+    await this.#_isAllowedForSwap(amountSats);
+
     let amountBtc = await this._exchange.convertToCurrency(amountSats, 'SATS', 'BTC');
     let response = await this._exchangeService.loadStableCoin(this._userid, transactionId, amountBtc, 'BTC', this._currency);
 
@@ -109,19 +112,28 @@ export class Wallet {
     return transaction;
   }
 
-  async saveWalletAccount(walletId) {
-    if (!config.exchangeMs.mockEnable) await this._redis.set('wallet_account_' + this._userid, new String(walletId));
-  }
-
   async getWalletId(userId) {
     return this._walletMs._getWalletId(userId);
   }
 
-  async _getReferenceId(userId) {
-    return await this.exchangeMs._getReferenceId(userId);
-  }
-
   async getCurrency() {
     return this._currency;
+  }
+
+  async #_isAllowedForSwap(amountSats) {
+    await this.#_isBalanceMinorThatUpperLimit(amountSats);
+  }
+
+  async #_isBalanceMinorThatUpperLimit(amountSats) {
+    let balance = await this.getBalance();
+    let amountUSDC = await this._exchange.convertToCurrency(amountSats, Currency.SATS, this._currency);
+    let upperLimit = config.swap.balanceUpperLimitUSDC;
+    if (balance + amountUSDC > upperLimit) {
+      throw {
+        name: 'RestrictionsWalletException',
+        code: ERROR_UPPER_LIMIT_CODE,
+        message: `Balance upper Limit was exceed. Upper Limit: ${upperLimit} ${this._currency}`
+      };
+    }
   }
 }

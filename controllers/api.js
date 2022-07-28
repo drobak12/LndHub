@@ -1,5 +1,6 @@
 import { Invo, Lock, Paym, Totp, User, Wallet } from '../class/';
 import { WalletMS } from '../class/external/WalletMS';
+import { Exchange } from '../class/external/Exchange';
 import Frisbee from 'frisbee';
 
 const lnurl = require('lnurl');
@@ -19,6 +20,8 @@ redis.monitor(function (err, monitor) {
     // console.log('REDIS', JSON.stringify(args));
   });
 });
+
+const EXCHANGE = new Exchange(redis);
 
 /****** START SET FEES FROM CONFIG AT STARTUP ******/
 /** GLOBALS */
@@ -451,7 +454,7 @@ router.post('/bill', postLimiter, async function (req, res) {
   let currency = req.body.currency;
   if (!req.body.currency) currency = 'SATS';
 
-  let amountInSats = await convertAmountToSatoshis(amount, currency);
+  let amountInSats = await EXCHANGE.convertAmountToSatoshis(amount, currency);
 
   logger.log('User.createBill', [req.id, u.getUserId(), amount, currency, amountInSats]);
   let lock = new Lock(redis, 'creating_bill_for' + u.getUserId());
@@ -489,7 +492,7 @@ router.post('/bill', postLimiter, async function (req, res) {
 });
 
 router.get('/wallet/stablecoin/limits', postLimiter, async function (req, res) {
-  let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+  let amountInSatsMinSwap = await EXCHANGE.convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
   res.send({
     min_swap_sats: amountInSatsMinSwap,
     min_swap_value: config.swap.min_swap_value,
@@ -515,11 +518,11 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res) {
   if (!currency) currency = 'SATS';
 
   try {
-    let amountInSats = await convertAmountToSatoshis(amount, currency);
+    let amountInSats = await EXCHANGE.convertAmountToSatoshis(amount, currency);
     amountInSats = Math.round(amountInSats);
     let fee = Math.floor(0); //TODO: calculate fee;
 
-    let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+    let amountInSatsMinSwap = await EXCHANGE.convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
     if (amountInSats < amountInSatsMinSwap) {
       await lock.releaseLock();
       return errorSwapTooSmall(res, amountInSatsMinSwap);
@@ -564,8 +567,14 @@ router.post('/wallet/stablecoin/load', postLimiter, async function (req, res) {
     });
   } catch (Error) {
     await lock.releaseLock();
-    logger.error('', [req.id, 'error loading stablecoin:', Error.message]);
-    return errorLoadStableCoins(res, Error);
+
+    let code = Error.code || 0;
+    if(code == 500){
+      return errorBalanceUpperLimit(res, Error)
+    }else {
+      logger.error('', [req.id, 'error loading stablecoin:', Error.message]);
+      return errorLoadStableCoins(res, Error);
+    }
   }
 });
 
@@ -588,10 +597,10 @@ router.post('/wallet/stablecoin/unload', postLimiter, async function (req, res) 
   if (!currency) currency = 'SATS';
 
   try {
-    let amountInSats = await convertAmountToSatoshis(amount, currency);
+    let amountInSats = await EXCHANGE.convertAmountToSatoshis(amount, currency);
     amountInSats = Math.round(amountInSats);
 
-    let amountInSatsMinSwap = await convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
+    let amountInSatsMinSwap = await EXCHANGE.convertAmountToSatoshis(config.swap.min_swap_value, config.swap.min_swap_currency);
     if (amountInSats < amountInSatsMinSwap) {
       await lock.releaseLock();
       return errorSwapTooSmall(res, amountInSatsMinSwap);
@@ -710,48 +719,13 @@ checkMasterAccount();
 updateConvertRatios();
 setInterval(updateConvertRatios, config.currencyConvert.updateIntervalMillis);
 
-//TODO: Move to Exchange JS
-async function getConvertRatioToSatoshis(currency) {
-  if ('SATS' == currency) return 1;
-  if ('BTC' == currency) return 100000000;
-  if ('EURO' == currency) currency = 'EUR';
-
-  let key = 'convert_ratio_BTC_' + currency;
-  let convertRatio = await redis.get(key);
-  logger.log('api.getConvertRatioToSatoshis', ['key:' + key, 'convertRatio: ' + convertRatio]);
-
-  if (!convertRatio) {
-    logger.error('Error in getConvertRatioToSatoshis', [currency]);
-    throw 'getConvertRatioToSatoshis:: Ratio is not defined';
-  }
-  return 100000000.0 / convertRatio;
-}
-
-async function convertAmountToSatoshis(amount, currency) {
-  if (!currency) return amount;
-  if ('SATS' == currency) return amount;
-
-  let ratio = await getConvertRatioToSatoshis(currency);
-  return ratio * amount;
-}
-
-async function convertToCurrency(amount, currencyFrom, currencyTo) {
-  if (!currencyFrom) currencyFrom = 'SATS';
-  if (!currencyTo) currencyTo = 'SATS';
-
-  let sats = await convertAmountToSatoshis(amount, currencyFrom);
-
-  let convertRatio = await convertAmountToSatoshis(1, currencyTo);
-  return sats / convertRatio;
-}
-
 router.get('/convertToCurrency', async function (req, res) {
   if (!req.query.amount) return errorBadArguments(res);
   if (!req.query.from) return errorBadArguments(res);
   if (!req.query.to) return errorBadArguments(res);
 
   let amount = 0 + req.query.amount;
-  amount = await convertToCurrency(amount, req.query.from, req.query.to);
+  amount = await EXCHANGE.convertToCurrency(amount, req.query.from, req.query.to);
   let response = {
     amount: amount,
     currency: req.query.to,
@@ -773,7 +747,7 @@ router.get('/bill', async function (req, res) {
   let currency = bill.currency;
   if (!currency) currency = 'SATS';
 
-  let amount = await convertAmountToSatoshis(bill.amount, currency);
+  let amount = await EXCHANGE.convertAmountToSatoshis(bill.amount, currency);
   amount = Math.round(amount);
 
   let withDrawRequest = {
@@ -1074,7 +1048,7 @@ router.post('/addinvoice', postLimiter, async function (req, res) {
 
   let currency = Currency.SATS;
   if (req.body.currency) currency = req.body.currency;
-  let amount = Math.round(await convertAmountToSatoshis(req.body.amt, currency));
+  let amount = Math.round(await EXCHANGE.convertAmountToSatoshis(req.body.amt, currency));
   let billToken = req.body.bill_token;
   let bill;
   if (billToken) {
@@ -1256,7 +1230,6 @@ router.post('/v2/payinvoice', async function (req, res) {
         paymentStream.write(inv);
 
         lock.releaseLock();
-        //TODO: Remove res.send. Bot send 2 request
         return res.send({
           status: 'OK',
           message: 'Transaction in progress....',
@@ -1837,6 +1810,15 @@ function errorUnloadStableCoins(res, error) {
     error: true,
     code: 19,
     message: 'Error unloading stable coins: ' + error.message,
+    error_object: error,
+  });
+}
+
+function errorBalanceUpperLimit(res, error) {
+  return res.send({
+    error: true,
+    code: 20,
+    message: error.message,
     error_object: error,
   });
 }

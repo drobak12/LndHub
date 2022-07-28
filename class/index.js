@@ -4,6 +4,7 @@ export * from './Paym';
 export * from './Invo';
 export * from './Totp';
 export * from './Wallet';
+export * from './Currency';
 export * from './TransactionExchange';
 export * from './external/WalletMS';
 export * from './external/IExchangeService';

@@ -17,8 +17,12 @@ export class HttpUtils {
         });
 
         res.on('end', () => {
-          logger.log('Response Service: ' + responseBody);
-          resolve(JSON.parse(responseBody));
+          logger.log('Response Service: ' + responseBody, ["HttpUtils"]);
+          try{
+            resolve(JSON.parse(responseBody));
+          }catch (Error){
+            reject(Error);
+          }
         });
       });
 
@@ -43,8 +47,12 @@ export class HttpUtils {
         });
 
         res.on('end', () => {
-          logger.log('Response Service: ' + responseBody);
-          resolve(JSON.parse(responseBody));
+          logger.log('Response Service: ' + responseBody, ["HttpUtils"]);
+          try{
+            resolve(JSON.parse(responseBody));
+          }catch (Error){
+            reject(Error);
+          }
         });
       });
 
@@ -63,8 +71,12 @@ export class HttpUtils {
         if (err) {
           reject(err);
         }
-        logger.log('Response Service: ' + body);
-        resolve(JSON.parse(body));
+        logger.log('Response Service: ' + body, ["HttpUtils"]);
+        try{
+          resolve(JSON.parse(body));
+        }catch (Error){
+          reject(Error);
+        }
       });
     });
   }
@@ -80,8 +92,12 @@ export class HttpUtils {
         });
 
         res.on('end', () => {
-          logger.log('Response Service: ' + responseBody);
-          resolve(JSON.parse(responseBody));
+          logger.log('Response Service: ' + responseBody, ["HttpUtils"]);
+          try{
+            resolve(JSON.parse(responseBody));
+          }catch (Error){
+            reject(Error);
+          }
         });
       });
 
@@ -106,8 +122,12 @@ export class HttpUtils {
         });
 
         res.on('end', () => {
-          logger.log('Response Service: ' + responseBody);
-          resolve(JSON.parse(responseBody));
+          logger.log('Response Service: ' + responseBody, ["HttpUtils"]);
+          try{
+            resolve(JSON.parse(responseBody));
+          }catch (Error){
+            reject(Error);
+          }
         });
       });
 

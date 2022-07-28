@@ -42,7 +42,6 @@ export class WalletMS {
       },
     ];
 
-    console.log('Request to WalletMS' + JSON.stringify(body));
     let data = await this._httpUtils.doHttpPostRequest(options, body);
     await this.verifyError(data);
     return data.response[0];
