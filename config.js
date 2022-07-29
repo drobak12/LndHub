@@ -38,7 +38,7 @@ let config = {
     currencies: ['USD', 'EUR', 'BRL', 'JPY', 'UYU']
   },
   swap:{
-    min_swap_value: 25,
+    min_swap_value: 35,
     min_swap_currency: 'USD',
     balanceUpperLimitValue: 100,
     balanceUpperLimitCurrency: 'USDC'
