@@ -127,7 +127,7 @@ export class Wallet {
   async #_isBalanceMinorThatUpperLimit(amountSats) {
     let balance = await this.getBalance();
     let amountUSDC = await this._exchange.convertToCurrency(amountSats, Currency.SATS, this._currency);
-    let upperLimit = config.swap.balanceUpperLimitUSDC;
+    let upperLimit = config.swap.balanceUpperLimitValue;
     if (balance + amountUSDC > upperLimit) {
       throw {
         name: 'RestrictionsWalletException',

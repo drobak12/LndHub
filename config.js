@@ -15,7 +15,7 @@ let config = {
   wallet: {
     companyId: 5323,
     hostname: '127.0.0.1',
-    port: 8081,
+    port: 9191,
     createAccountUrl: '/wallet',
     balanceUrl: '/wallet/{walletId}/available_balance',
     transactionUrl: '/wallet/{walletId}/transactions',
