@@ -469,7 +469,7 @@ router.post('/bill', postLimiter, async function (req, res) {
       userBalance = await u.getCalculatedBalance();
     } catch (Error) {
       logger.log('User.createBill', [req.id, 'error running getCalculatedBalance():', Error.message]);
-      lock.releaseLock();
+      await lock.releaseLock();
       return errorTryAgainLater(res);
     }
     logger.log('User.createBill', [req.id, 'Balance: ' + userBalance]);
@@ -482,11 +482,11 @@ router.post('/bill', postLimiter, async function (req, res) {
     }
 
     let bill = await u.createBill(req.id, amount, currency, amountInSats);
-    lock.releaseLock();
+    await lock.releaseLock();
     return res.send({ bill: bill, bill_request: bill.token });
   } catch (Error) {
     logger.log('', [req.id, 'error creating bill:', Error.message]);
-    lock.releaseLock();
+    await lock.releaseLock();
     return errorSendCoins(res, Error);
   }
 });
@@ -1585,19 +1585,33 @@ router.get('/checkrouteinvoice', async function (req, res) {
   });
 });
 
-router.get('/queryroutes/:source/:dest/:amt', async function (req, res) {
-  logger.log('/queryroutes', [req.id]);
+router.get('/invoice/fee', async function (req, res) {
+  logger.log('/invoice/fee', [req.id]);
 
-  let request = {
-    pub_key: req.params.dest,
-    use_mission_control: true,
-    amt: req.params.amt,
-    source_pub_key: req.params.source,
-  };
-  lightning.queryRoutes(request, function (err, response) {
-    console.log(JSON.stringify(response, null, 2));
-    res.send(response);
-  });
+  let payment = new Paym(redis, bitcoinclient, lightning);
+  let paymentRequest = req.query.payment_request;
+
+  await payment.setInvoice(paymentRequest);
+  await payment.decodePayReqViaRpc(paymentRequest);
+
+  let routes = await payment.queryRoutes();
+  let estimateFee = await payment.estimateFee(routes)
+  res.send(estimateFee);
+
+});
+
+router.get('/invoice/routes', async function (req, res) {
+  logger.log('/invoice/routes', [req.id]);
+
+  let payment = new Paym(redis, bitcoinclient, lightning);
+  let paymentRequest = req.query.payment_request;
+
+  await payment.setInvoice(paymentRequest);
+  await payment.decodePayReqViaRpc(paymentRequest);
+
+  let routes = await payment.queryRoutes();
+  res.send(routes);
+
 });
 
 router.get('/getchaninfo/:chanid', async function (req, res) {
