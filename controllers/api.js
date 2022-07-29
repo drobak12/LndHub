@@ -1832,7 +1832,8 @@ function errorBalanceUpperLimit(res, error) {
   return res.send({
     error: true,
     code: 20,
-    max_amount_usdc: config.swap.balanceUpperLimitUSDC,
+    max_amount_value: config.swap.balanceUpperLimitValue,
+    max_amount_currency: config.swap.balanceUpperLimitCurrency,
     message: error.message,
     error_object: error,
   });

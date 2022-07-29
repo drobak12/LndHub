@@ -40,7 +40,8 @@ let config = {
   swap:{
     min_swap_value: 25,
     min_swap_currency: 'USD',
-    balanceUpperLimitUSDC: 100
+    balanceUpperLimitValue: 100,
+    balanceUpperLimitCurrency: 'USDC'
   },
   exchangeMs: {
     mockEnable: false,
